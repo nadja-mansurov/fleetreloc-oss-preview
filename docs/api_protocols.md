@@ -1,17 +1,17 @@
 1. Executive Summary & Architecture Overview
 
-This document defines the interface control contracts, event-driven webhooks, and REST/gRPC payloads connecting the FleetReloc infrastructure components. The architecture isolates external third-party communication (Meta WABA, Maps, AI/LLM Inference) from core transaction processing, ensuring high throughput, deterministic concurrency handling during First-Come-First-Served (FCFS) job claiming, strict resilience against downstream service degradation, and zero-data-retention compliance via hybrid or local AI processing nodes.
+This document defines the interface control contracts, event-driven webhooks, and REST/gRPC payloads connecting the FleetReloc infrastructure components. The architecture isolates external third-party communication (Meta WABA, Maps, AI/LLM Inference) from core transaction processing, ensuring high throughput, deterministic concurrency handling during First-Come-First-Served (FCFS) job claiming, strict resilience against downstream service degradation, and zero-data-retention compliance via ephemeral hashing and hybrid/local AI processing nodes.
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                                INTEGRATION LANDSCAPE                                   │
+│                                 INTEGRATION LANDSCAPE                                  │
 └────────────────────────────────────────────────────────────────────────────────────────┘
  [ External Parties ]             [ API Gateway Layer ]            [ Internal Services ]
    Meta Cloud API (WABA) ──(HTTPS)──► Ingestion Gateway ──(gRPC/REST)─► VRP Solver Engine
    Local / Cloud LLM Node◄─(HTTPS)─── (FastAPI / Edge)  ──(WebSockets)► Supabase Realtime
-   Mapbox / OSRM API    ◄─(HTTPS)───        │                        (PostgreSQL DB)
+   Mapbox / OSRM API    ◄─(HTTPS)───         │                       (PostgreSQL DB)
                                              └───────(BullMQ)───────► Redis Cluster
-                                                                   (Redlock & Queue)
+                                                                     (Redlock & Queue)
 ```
 # 2. Authentication & Security Protocols
 
@@ -51,7 +51,7 @@ Triggered when a driver taps the interactive button `[ Claim Job ]` inside a Wha
             },
             "contacts": [
               {
-                "profile": { "name": "Ahmed Al Mansoori" },
+                "profile": { "name": "[REDACTED_ZERO_TRUST]" },
                 "wa_id": "971501234567"
               }
             ],
@@ -88,7 +88,7 @@ Used for real-time recalculation when a driver claims a vehicle via FCFS button 
 * **Request Payload:**
 ```json
 {
-  "driver_id": "d9b2e8a1-4c3b-4a5e-8f2a-1b2c3d4e5f6a",
+  "driver_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "claimed_vehicle": {
     "vin": "WBA33AG080FP12345",
     "pickup_lat": 25.204800,
@@ -109,7 +109,7 @@ Used for real-time recalculation when a driver claims a vehicle via FCFS button 
     "batch_id": "b1a2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",
     "co_drivers_available": [
       {
-        "driver_id": "e8a1b2c3-4d5e-6f7a-8b9c-0d1e2f3a4b5c",
+        "driver_hash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
         "dropoff_lat": 24.455000,
         "dropoff_lng": 54.380000,
         "estimated_dropoff_time": "2026-08-20T14:15:00Z"
@@ -125,7 +125,7 @@ Used for real-time recalculation when a driver claims a vehicle via FCFS button 
   "status": "SUCCESS",
   "execution_time_ms": 138,
   "route_plan": {
-    "driver_id": "d9b2e8a1-4c3b-4a5e-8f2a-1b2c3d4e5f6a",
+    "driver_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "vehicle_vin": "WBA33AG080FP12345",
     "leg_1_pickup": {
       "eta": "2026-08-20T08:15:00Z",
@@ -137,7 +137,7 @@ Used for real-time recalculation when a driver claims a vehicle via FCFS button 
     },
     "return_logistics": {
       "mode": "CONVOY_RETURN",
-      "convoy_lead_driver_id": "e8a1b2c3-4d5e-6f7a-8b9c-0d1e2f3a4b5c",
+      "convoy_lead_driver_hash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
       "return_vehicle_vin": "WAUZZZ4G0BN123456",
       "rendezvous_location": {
         "lat": 50.112000,
@@ -200,12 +200,12 @@ Structured output format requested from either enterprise cloud LLM endpoints or
   "old": {
     "id": "a9b8c7d6-e5f4-3a2b-1c0d-9e8f7a6b5c4d",
     "status": "unassigned",
-    "assigned_driver_phone": null
+    "assigned_driver_hash": null
   },
   "new": {
     "id": "a9b8c7d6-e5f4-3a2b-1c0d-9e8f7a6b5c4d",
     "status": "assigned",
-    "assigned_driver_phone": "d9b2e8a1-4c3b-4a5e-8f2a-1b2c3d4e5f6a",
+    "assigned_driver_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "locked_until": null
   }
 }
@@ -215,8 +215,7 @@ Structured output format requested from either enterprise cloud LLM endpoints or
 
 | Error Code | HTTP Status | Error Category | Description & Mitigation Strategy |
 | :--- | :--- | :--- | :--- |
-| `ERR_REDLOCK_FAILED` | 409 Conflict | Concurrency | Triggered when a driver attempts to claim an already locked car. Returns WhatsApp text informing driver to pick another car. |
+| `ERR_REDLOCK_FAILED` | 409 Conflict | Concurrency | Triggered when an anonymous session attempts to claim an already locked car. Returns WhatsApp text instructing driver to pick another car. |
 | `ERR_OCR_CONFIDENCE_LOW` | 422 Unprocessable | AI Extraction | Document parsing confidence <0.80. Pushes batch to "Manual Review Queue" on Dispatcher Dashboard. |
 | `ERR_MAPBOX_TIMEOUT` | 504 Gateway Timeout | Routing API | Mapbox response >2000 ms. Fallback instantly triggers local OSRM instance. |
 | `ERR_WABA_RATE_LIMIT` | 429 Too Many Requests | Messaging | Meta API limit reached. Outbound payload requeued in BullMQ with exponential backoff (2s, 4s, 8s...). |
-
