@@ -13,7 +13,7 @@ Public engineering preview of **FleetReloc**, a specialized B2B SaaS platform de
 * **Monorepo Structure:** Built with a decoupled architecture featuring a FastAPI backend (`apps/api`) and a Next.js 16 / TypeScript frontend (`apps/web`).
 * **Zero-PII Data Compliance:** Designed for strict privacy standards; driver phone numbers and session mapping are handled ephemerally via Redis, keeping persistent databases clear of permanent personal data.
 * **Concurrency & Safety:** Leverages Redis Redlock to ensure race-condition-free, First-Come-First-Served (FCFS) driver job-claiming mechanics over WhatsApp webhooks.
-* **Resilient Routing & Ingestion:** Hybrid architecture combining Google OR-Tools / OSRM fallbacks for vehicle routing problem (VRP) optimization and structured OCR text parsing for unstructured manifests.
+* **Resilient Routing & Ingestion:** Hybrid architecture combining Google OR-Tools / OSRM fallbacks for vehicle routing problem (VRP) optimization and structured OCR text parsing supporting both enterprise cloud LLMs and self-hosted local inference runtimes (e.g., Ollama / vLLM) for zero-data-retention compliance.
 
 ---
 
@@ -27,7 +27,6 @@ Public engineering preview of **FleetReloc**, a specialized B2B SaaS platform de
 ## Tech Stack
 
 * **Backend:** Python 3.11+, FastAPI, SQLAlchemy 2.0, Alembic, Pydantic v2, Redis (Redlock).
+* **AI / Parsing:** OpenAI API / Self-hosted Local LLM Nodes (Ollama/vLLM compatible).
 * **Frontend:** Next.js, React, Tailwind CSS, TypeScript.
 * **Infrastructure:** Docker, Supabase (PostgreSQL), OSRM.
-
-

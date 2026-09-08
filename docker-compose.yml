@@ -1,0 +1,85 @@
+version: "3.9"
+
+# Local development stack for FleetReloc.
+# Provisions PostgreSQL (Supabase-compatible schema, see docs/db_schema.md)
+# and Redis (Redlock + BullMQ-compatible queue, see docs/api_protocols.md).
+# The api/web services are included for convenience; they can also be run
+# natively (uvicorn / npm run dev) against these two services.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: fleetreloc-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fleetreloc}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fleetreloc}
+      POSTGRES_DB: ${POSTGRES_DB:-fleetreloc}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fleetreloc}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: fleetreloc-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: fleetreloc-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fleetreloc}:${POSTGRES_PASSWORD:-fleetreloc}@postgres:5432/${POSTGRES_DB:-fleetreloc}
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./apps/api:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    container_name: fleetreloc-web
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000/api/v1
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./apps/web:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
+  redis_data:
