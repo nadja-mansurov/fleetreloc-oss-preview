@@ -2,7 +2,7 @@
 
 > **Disclaimer:** This repository is an independent, personal R&D portfolio project developed strictly on my own time, using my own personal equipment, and without any relation, contribution, or connection to any current or past employers. All concepts, code structures, and architectures presented here are autonomous technical explorations and do not utilize proprietary employer resources or trade secrets.
 
-Public engineering preview of **FleetReloc**, a specialized B2B SaaS platform designed to coordinate bulk vehicle-transport orders (10–30 vehicle fleets), manage transient driver workflows via WhatsApp, and optimize multi-stop routing for the GCC logistics market.
+Public engineering preview of **FleetReloc**, a specialized B2B SaaS platform designed to coordinate bulk vehicle-transport orders (10–30 vehicle fleets), manage transient driver workflows via WhatsApp, and optimize multi-stop routing tailored for the GCC logistics market.
 
 > **Note:** This is a public architectural skeleton and reference implementation. The proprietary business logic, core optimization engines, and production security layers remain private.
 
@@ -11,9 +11,10 @@ Public engineering preview of **FleetReloc**, a specialized B2B SaaS platform de
 ## Architecture Highlights
 
 * **Monorepo Structure:** Built with a decoupled architecture featuring a FastAPI backend (`apps/api`) and a Next.js 16 / TypeScript frontend (`apps/web`).
-* **Zero-PII Data Compliance:** Designed for strict privacy standards; driver phone numbers and session mapping are handled ephemerally via Redis, keeping persistent databases clear of permanent personal data.
+* **Bilingual & RTL-Ready Workflows:** Native support for mixed Arabic/English B2B communications, including Right-to-Left (RTL) payload parsing and multilingual NLP extractors for WhatsApp webhook events.
+* **Zero-PII & Data Sovereignty:** Engineered for strict regional data residency and privacy standards; driver phone numbers and session mapping are handled ephemerally via Redis, keeping persistent databases clear of permanent personal data.
 * **Concurrency & Safety:** Leverages Redis Redlock to ensure race-condition-free, First-Come-First-Served (FCFS) driver job-claiming mechanics over WhatsApp webhooks.
-* **Resilient Routing & Ingestion:** Hybrid architecture combining Google OR-Tools / OSRM fallbacks for vehicle routing problem (VRP) optimization and structured OCR text parsing supporting both enterprise cloud LLMs and self-hosted local inference runtimes (e.g., Ollama / vLLM) for zero-data-retention compliance.
+* **Resilient Routing & Ingestion:** Hybrid architecture combining Google OR-Tools / OSRM fallbacks for vehicle routing problem (VRP) optimization and structured OCR text parsing supporting both enterprise cloud LLMs and self-hosted local inference runtimes (e.g., Ollama / vLLM) optimized for multilingual (Arabic/English) document parsing with zero data leakage.
 
 ---
 
@@ -27,6 +28,6 @@ Public engineering preview of **FleetReloc**, a specialized B2B SaaS platform de
 ## Tech Stack
 
 * **Backend:** Python 3.11+, FastAPI, SQLAlchemy 2.0, Alembic, Pydantic v2, Redis (Redlock).
-* **AI / Parsing:** OpenAI API / Self-hosted Local LLM Nodes (Ollama/vLLM compatible).
-* **Frontend:** Next.js, React, Tailwind CSS, TypeScript.
+* **AI / Parsing:** OpenAI API / Self-hosted Local LLM Nodes (Ollama / vLLM compatible) with fine-tuned Arabic/English extraction pipelines.
+* **Frontend:** Next.js, React, Tailwind CSS, TypeScript (RTL/BiDi layout support).
 * **Infrastructure:** Docker, Supabase (PostgreSQL), OSRM.
