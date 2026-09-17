@@ -15,6 +15,7 @@ Public engineering preview of **FleetReloc**, a specialized B2B SaaS platform de
 * **Zero-PII & Data Sovereignty:** Engineered for strict regional data residency and privacy standards; driver phone numbers and session mapping are handled ephemerally via Redis, keeping persistent databases clear of permanent personal data.
 * **Concurrency & Safety:** Leverages Redis Redlock to ensure race-condition-free, First-Come-First-Served (FCFS) driver job-claiming mechanics over WhatsApp webhooks.
 * **Resilient Routing & Ingestion:** Hybrid architecture combining Google OR-Tools / OSRM fallbacks for vehicle routing problem (VRP) optimization and structured OCR text parsing supporting both enterprise cloud LLMs and self-hosted local inference runtimes (e.g., Ollama / vLLM) optimized for multilingual (Arabic/English) document parsing with zero data leakage.
+* **Pluggable Notification Architecture:** Decoupled multi-channel driver notification engine built using the Strategy and Factory patterns (`DriverNotifier` interface). Seamlessly switches between Telegram Bot API (for local R&D and rapid MVP testing) and Bird/WhatsApp Business API (for GCC production environments) without altering core booking or dispatch logic.
 
 ---
 
