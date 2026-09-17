@@ -24,6 +24,10 @@ Public engineering preview of **FleetReloc**, a specialized B2B SaaS platform de
 * [`api_protocols.md`](docs/api_protocols.md) — Authoritative contracts covering WABA webhooks, routing schemas, error codes, and real-time event specs.
 * [`db_schema.md`](docs/db_schema.md) — PostgreSQL / Supabase DDL definitions, state machines, and multi-tenant RLS isolation rules.
 
+### 📄 Sample Ingestion Document
+Here is an example of a bilingual (English/Arabic) transport manifest (`local_order_ksa.png`) processed by the OCR and LLM pipeline to automatically extract batch payloads, vehicles (Hyundai, Toyota), and Riyadh-based coordinates:
+
+![Local Transport Order KSA](docs/samples/local_order_ksa.png)
 ---
 
 ## Tech Stack
@@ -32,3 +36,4 @@ Public engineering preview of **FleetReloc**, a specialized B2B SaaS platform de
 * **AI / Parsing:** OpenAI API / Self-hosted Local LLM Nodes (Ollama / vLLM compatible) with fine-tuned Arabic/English extraction pipelines.
 * **Frontend:** Next.js, React, Tailwind CSS, TypeScript (RTL/BiDi layout support).
 * **Infrastructure:** Docker, Supabase (PostgreSQL), OSRM.
+
