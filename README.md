@@ -25,7 +25,9 @@ Public engineering preview of **FleetReloc**, a specialized B2B SaaS platform de
 * [`db_schema.md`](docs/db_schema.md) — PostgreSQL / Supabase DDL definitions, state machines, and multi-tenant RLS isolation rules.
 
 ### 📄 Sample Ingestion Document
-Here is an example of a bilingual (English/Arabic) transport manifest (`local_order_ksa.png`) processed by the OCR and LLM pipeline to automatically extract batch payloads, vehicles (Hyundai, Toyota), and Riyadh-based coordinates:
+Here is a synthetic example of a bilingual (English/Arabic) transport manifest (`local_order_ksa.png`) processed by the OCR and LLM pipeline to automatically extract batch payloads, vehicles (Hyundai, Toyota), and Riyadh-based coordinates:
+
+> *Note: All company names, Commercial Registration (CR) numbers, and addresses shown in the sample above are entirely synthetic and generated solely for R&D demonstration purposes.*
 
 ![Local Transport Order KSA](docs/samples/local_order_ksa.png)
 ---
