@@ -16,9 +16,9 @@ Public engineering preview of **FleetReloc**, a specialized B2B SaaS platform de
 * **Concurrency & Safety:** Leverages Redis Redlock to ensure race-condition-free, First-Come-First-Served (FCFS) driver job-claiming mechanics over WhatsApp webhooks.
 * **Resilient Routing & Ingestion:** Hybrid architecture combining Google OR-Tools / OSRM fallbacks for vehicle routing problem (VRP) optimization and structured OCR text parsing supporting both enterprise cloud LLMs and self-hosted local inference runtimes (e.g., Ollama / vLLM) optimized for multilingual (Arabic/English) document parsing with zero data leakage.
 * **Pluggable Notification Architecture:** Decoupled multi-channel driver notification engine built using the Strategy and Factory patterns (`DriverNotifier` interface). Seamlessly switches between Telegram Bot API (for local R&D and rapid MVP testing) and Bird/WhatsApp Business API (for GCC production environments) without altering core booking or dispatch logic.
-* **Zero-Trust Identity & Hashing Core:** Implemented a strict Zero-Trust ingestion pipeline (`identity.py`) that normalizes raw contact inputs (WhatsApp, Telegram, phone numbers) and maps them into irreversible, salted HMAC-SHA256 `driver_hash` identifiers. Persistent databases and logs are strictly guarded against storing raw PII, ensuring full GDPR/PDPL compliance.
-* **Demo Magic Number Routing:** Features an isolated, configuration-driven "Magic Number" override (`DEMO_MAGIC_PHONE`) that safely reroutes dispatch notifications to a mock Telegram chat ID during live presentations and automated test suites, keeping real driver credentials completely untouched.
-* **Iterative Bulk Batch & Broadcast Waves:** Relocation orders (10–30 vehicles) are managed via structured `BulkBatch` and `BroadcastWave` relational models. Notifications are distributed in iterative waves targeting exclusively `driver_hash` arrays, eliminating persistent PII exposure while maintaining precise First-Come-First-Served (FCFS) tracking.
+* **Zero-Trust Identity & Hashing Core:** Strict data ingestion pipeline (`identity.py`) mapping raw contacts into irreversible HMAC-SHA256 `driver_hash` identifiers for full GDPR/PDPL compliance.
+* **Demo Magic Number Routing:** Isolated configuration override (`DEMO_MAGIC_PHONE`) for safe live presentations and automated end-to-end testing.
+* **Iterative Bulk Batch & Broadcast Waves:** Relocation orders structured into `BulkBatch` and `BroadcastWave` models, distributing notifications strictly via hashed arrays.
 
 ---
 
@@ -64,8 +64,9 @@ Here is a synthetic example of a bilingual (English/Arabic) transport manifest (
 
 ## Tech Stack
 
-* **Backend:** Python 3.11+, FastAPI, SQLAlchemy 2.0, Alembic, Pydantic v2, Redis (Redlock).
+* **Backend:** Python 3.11+, FastAPI, SQLAlchemy 2.0 (Mapped / mapped_column), Alembic, Pydantic v2, Redis (Redlock).
+* **Security & Identity:** HMAC-SHA256 zero-trust normalization, ephemeral demo-mode routing fixtures, strict PII-free persistence guards.
 * **AI / Parsing:** OpenAI API / Self-hosted Local LLM Nodes (Ollama / vLLM compatible) with fine-tuned Arabic/English extraction pipelines.
 * **Frontend:** Next.js, React, Tailwind CSS, TypeScript (RTL/BiDi layout support).
-* **Infrastructure:** Docker, Supabase (PostgreSQL), OSRM.
+* **Infrastructure:** Docker, Supabase (PostgreSQL with JSONB and array-based broadcast wave tracking), OSRM.
 
