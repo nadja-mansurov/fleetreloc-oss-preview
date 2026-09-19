@@ -10,15 +10,20 @@ Public engineering preview of **FleetReloc**, a specialized B2B SaaS platform de
 
 ## Architecture Highlights
 
+### Core System & Frontend
 * **Monorepo Structure:** Built with a decoupled architecture featuring a FastAPI backend (`apps/api`) and a Next.js 16 / TypeScript frontend (`apps/web`).
 * **Bilingual & RTL-Ready Workflows:** Native support for mixed Arabic/English B2B communications, including Right-to-Left (RTL) payload parsing and multilingual NLP extractors for WhatsApp webhook events.
+
+### Security, Identity & Data Sovereignty
+* **Zero-Trust Identity & Hashing Core:** Strict data ingestion pipeline mapping raw contacts into irreversible HMAC-SHA256 `driver_hash` identifiers at the API boundary for full GDPR/PDPL compliance, ensuring no raw PII ever hits persistent storage.
 * **Zero-PII & Data Sovereignty:** Engineered for strict regional data residency and privacy standards; driver phone numbers and session mapping are handled ephemerally via Redis, keeping persistent databases clear of permanent personal data.
+* **Demo Magic Number Routing:** Isolated configuration override (`DEMO_MAGIC_PHONE`) for safe live presentations and automated end-to-end testing.
+
+### Dispatch, Routing & Concurrency
+* **Iterative Bulk Batch & Broadcast Waves:** Relocation orders structured into `BulkBatch` and `BroadcastWave` models, distributing notifications strictly via hashed arrays.
 * **Concurrency & Safety:** Leverages Redis Redlock to ensure race-condition-free, First-Come-First-Served (FCFS) driver job-claiming mechanics over WhatsApp webhooks.
 * **Resilient Routing & Ingestion:** Hybrid architecture combining Google OR-Tools / OSRM fallbacks for vehicle routing problem (VRP) optimization and structured OCR text parsing supporting both enterprise cloud LLMs and self-hosted local inference runtimes (e.g., Ollama / vLLM) optimized for multilingual (Arabic/English) document parsing with zero data leakage.
 * **Pluggable Notification Architecture:** Decoupled multi-channel driver notification engine built using the Strategy and Factory patterns (`DriverNotifier` interface). Seamlessly switches between Telegram Bot API (for local R&D and rapid MVP testing) and Bird/WhatsApp Business API (for GCC production environments) without altering core booking or dispatch logic.
-* **Zero-Trust Identity & Hashing Core:** Strict data ingestion pipeline mapping raw contacts into irreversible HMAC-SHA256 `driver_hash` identifiers at the API boundary for full GDPR/PDPL compliance, ensuring no raw PII ever hits persistent storage.
-* **Demo Magic Number Routing:** Isolated configuration override (`DEMO_MAGIC_PHONE`) for safe live presentations and automated end-to-end testing.
-* **Iterative Bulk Batch & Broadcast Waves:** Relocation orders structured into `BulkBatch` and `BroadcastWave` models, distributing notifications strictly via hashed arrays.
 
 ---
 
