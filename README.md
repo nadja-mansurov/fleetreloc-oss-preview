@@ -44,10 +44,7 @@ FleetReloc demonstrates how to solve a core logistical challenge: coordinating m
 
 > Watch how the FleetReloc dispatcher dashboard works in action—featuring instant language switching (English / RTL Arabic), transport manifest uploading, iterative driver broadcasts via Telegram, and real-time status tracking:
 
-<video width="100%" controls autoplay loop muted>
-  <source src="https://github.com/user-attachments/assets/cdcf8d2f-6616-4f23-8f56-96573ce72303" type="video/mp4">
-  Your browser does not support the video tag.
-</video>
+https://github.com/user-attachments/assets/cdcf8d2f-6616-4f23-8f56-96573ce72303
 
 ---
 
