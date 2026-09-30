@@ -18,6 +18,7 @@ Public architectural preview and core boilerplate of FleetReloc — a specialize
 - Zero-Trust Identity & Hashing Core: Strict data ingestion pipeline mapping raw contacts into irreversible HMAC-SHA256 driver_hash identifiers at the API boundary for full GDPR/PDPL compliance, ensuring no raw PII ever hits persistent storage.
 - Ephemeral Redis Storage: Driver phone numbers and session mapping are handled ephemerally via Redis with strict TTL, keeping persistent databases clear of permanent personal data.
 - Demo Magic Number Routing: Isolated configuration override (`DEMO_MAGIC_PHONE`) for safe live presentations and automated end-to-end testing.
+- Enterprise Multi-Tenancy & Data Isolation: Automated database-level query filtering and context-bound tenant separation (via SQLAlchemy event listeners and request-scoped context variables) to ensure strict data sovereignty and zero cross-tenant leaks for enterprise clients.
 
 ### Dispatch, Routing & Concurrency
 - Iterative Bulk Batch & Broadcast Waves: Relocation orders structured into BulkBatch and BroadcastWave models, distributing notifications iteratively via hashed arrays.
