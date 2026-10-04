@@ -41,6 +41,21 @@ FleetReloc demonstrates how to solve a core logistical challenge: coordinating m
 
 ---
 
+## 🗺️ Routing & Geolocation
+FleetReloc features dynamic route visualization and distance calculation. 
+- **Default Provider:** By default, the application connects to the open-source OSRM routing engine to fetch real-road geometries, distances, and ETAs.
+- **Configuration (.env):** Easily switchable via environment variables depending on the deployment environment:
+  ```env
+  ROUTING_PROVIDER=osrm
+  # Public endpoint used for quick out-of-the-box evaluations:
+  OSRM_BASE_URL=[https://router.project-osrm.org/route/v1/driving](https://router.project-osrm.org/route/v1/driving)
+  # Or local Docker container for isolated environments:
+  # OSRM_BASE_URL=http://osrm-backend:5000/route/v1/driving
+  ```
+- **Security & Data Isolation:** For high-compliance environments (such as GDPR or GCC PDPL guidelines), deploying a self-hosted containerized OSRM instance ensures that fleet coordinates and telemetry data never leave the local infrastructure.
+
+---
+
 ## Demo Preview
 
 > Watch how the FleetReloc dispatcher dashboard works in action—featuring instant language switching (English / RTL Arabic), transport manifest uploading, iterative driver broadcasts via Telegram, and real-time status tracking:
@@ -70,4 +85,4 @@ Here is a synthetic example of a bilingual (English/Arabic) transport manifest (
 - Security & Identity: HMAC-SHA256 zero-trust normalization, ephemeral demo-mode routing fixtures, strict PII-free persistence guards.
 - AI / Parsing: OpenAI API / Self-hosted Local LLM Nodes (Ollama / vLLM compatible) with multilingual Arabic/English extraction pipelines.
 - Frontend: Next.js, React, Tailwind CSS, TypeScript (RTL/BiDi layout support).
-- Infrastructure: Docker, PostgreSQL (with JSONB and array-based broadcast wave tracking), OSRM.
+- Infrastructure: Docker, PostgreSQL (with JSONB and array-based broadcast wave tracking), OSRM (Self-hosted / Public routing engine).
