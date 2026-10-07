@@ -155,6 +155,20 @@ Used for real-time recalculation when a driver claims a vehicle via FCFS button 
 ## 5.1 OCR & Structured Extraction Contract
 Structured output format requested from either enterprise cloud LLM endpoints or self-hosted local inference runtimes (e.g., Ollama/vLLM via OpenAI-compatible endpoints) with strict JSON Schema enforcement during PDF/Excel manifest ingestion.
 
+> **Implementation note (live, see `apps/api/app/schemas/bulk_order_manifest.py`):**
+> the deployed Pydantic schema deviates from the plain JSON Schema below in
+> two deliberate ways: (1) `pickup_location`/`dropoff_location` are
+> structured `PlaceDetail` objects (`place_name`, `place_type`, `city`,
+> `country`) rather than bare strings — required for airport-aware
+> geocoding — with a bare string still accepted and auto-normalized for
+> backward compatibility; (2) `vin` and the time-window fields are
+> optional/coercible rather than hard-`required`, since the OCR/LLM
+> extraction prompt cannot always recover a valid 17-character VIN or exact
+> time windows from unstructured source documents, and hard-failing the
+> whole manifest on one bad field would defeat the confidence-gating
+> workflow in Section 7. An explicit `confidence` field (float, 0.0–1.0) is
+> also present on every manifest — see `ERR_OCR_CONFIDENCE_LOW` below.
+
 ```json
 {
   "$schema": "[http://json-schema.org/draft-07/schema#](http://json-schema.org/draft-07/schema#)",
@@ -163,6 +177,7 @@ Structured output format requested from either enterprise cloud LLM endpoints or
   "properties": {
     "client_name": { "type": "string" },
     "manifest_reference": { "type": "string" },
+    "confidence": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
     "vehicles": {
       "type": "array",
       "items": {
@@ -171,10 +186,26 @@ Structured output format requested from either enterprise cloud LLM endpoints or
           "vin": { "type": "string", "pattern": "^[A-HJ-NPR-Z0-9]{17}$" },
           "make_model": { "type": "string" },
           "license_plate": { "type": "string" },
-          "pickup_location": { "type": "string" },
+          "pickup_location": {
+            "type": "object",
+            "properties": {
+              "place_name": { "type": "string" },
+              "place_type": { "type": "string" },
+              "city": { "type": "string" },
+              "country": { "type": "string" }
+            }
+          },
           "pickup_window_start": { "type": "string", "format": "date-time" },
           "pickup_window_end": { "type": "string", "format": "date-time" },
-          "dropoff_location": { "type": "string" },
+          "dropoff_location": {
+            "type": "object",
+            "properties": {
+              "place_name": { "type": "string" },
+              "place_type": { "type": "string" },
+              "city": { "type": "string" },
+              "country": { "type": "string" }
+            }
+          },
           "dropoff_deadline": { "type": "string", "format": "date-time" }
         },
         "required": ["vin", "pickup_location", "dropoff_location", "dropoff_deadline"]
@@ -184,6 +215,72 @@ Structured output format requested from either enterprise cloud LLM endpoints or
   "required": ["client_name", "vehicles"]
 }
 ```
+
+## 5.2 Multi-File Manifest Uploads & Parallel Optimization Sessions
+
+A dispatcher may upload several manifest files concurrently (e.g. via the
+dispatcher dashboard's multi-file drop zone). Each file is parsed and
+ingested as its own independent `bulk_batches` row, but many such batches
+can be grouped under a single `optimization_sessions` row via
+`bulk_batches.session_id`, letting a dispatcher track and operate on
+several files feeding one logical routing/chaining stream together —
+while each file's own parse outcome (`status`, `successful_rows`,
+`failed_rows`) stays independently auditable. See `docs/db_schema.md`
+("Multi-file manifest uploads") for the underlying schema.
+
+* `GET /api/v1/sessions/` — list all `OptimizationSession` streams for the
+  caller's tenant (strictly tenant-scoped via the automatic ORM filter).
+* `GET /api/v1/sessions/{session_id}/batches` — list every `bulk_batches`
+  row (one per uploaded file) belonging to a given session, 404 if the
+  session does not belong to the caller's tenant.
+
+A dispatcher can run **2+ independent, parallel** `OptimizationSession`
+streams simultaneously (e.g. a Ketzyn→Berlin stream alongside a
+Frankfurt→Hamburg stream) without any cross-contamination: every
+`route_legs` row carries a mandatory `session_id`, and backhaul-chaining
+offers (Section 5.3) are only ever matched within the same
+`(tenant_id, session_id)` pair.
+
+## 5.3 Route Leg State Machine & Round-Trip Backhaul Chaining
+
+Multi-leg route segments are tracked in the `route_legs` table (see
+`docs/db_schema.md`), constrained by the `ck_route_legs_status` CHECK
+constraint to exactly five states:
+
+```
+pending ──▶ claimed_driver ──▶ passenger_offered ──▶ claimed_passenger
+   ▲               │
+   │               ▼
+   └────────── rejected
+```
+
+* **`pending`** — default state; eligible for FCFS claiming.
+* **`claimed_driver`** — set when a driver claims the outbound leg via the
+  Telegram webhook (`apps/api/app/api/v1/endpoints/telegram.py`), strictly
+  scoped to `(tenant_id, batch_id)`. This automatically triggers a lookup
+  for a matching round-trip backhaul leg (destination → origin) within the
+  **same** `(tenant_id, session_id)` — never across tenants or sessions.
+* **`rejected`** — set when a driver explicitly declines the leg.
+* **`passenger_offered`** — set automatically on the matching backhaul leg
+  once the outbound leg is claimed, entering the round-trip chaining offer
+  pool for a return passenger/driver.
+* **`claimed_passenger`** — terminal state once the backhaul leg itself is
+  claimed.
+
+### Dispatcher Manual Controls
+
+* `POST /api/v1/batches/{batch_id}/segments/{leg_id}/retry` — resets a
+  `rejected`/`claimed_driver` leg back to `pending` and clears
+  `driver_phone`, so it re-enters the FCFS/backhaul-offer pool. Strictly
+  verified against `(tenant_id, batch_id, leg_id)` before mutation — 404
+  if the batch or leg does not belong to the caller's tenant.
+* `DELETE /api/v1/batches/{batch_id}/segments/{leg_id}/driver` —
+  unassigns the currently claimed `driver_phone` (driver_hash) from a
+  segment and resets it to `pending`, under the same strict tenant/batch/
+  leg verification.
+* `GET /api/v1/batches/{batch_id}/segments` — lists all `route_legs` for a
+  batch, tenant-scoped, used by the dispatcher dashboard's per-phone,
+  per-leg status table across every file/batch in the active session.
 
 # 6. Realtime WebSockets & Event Specifications (Supabase)
 
@@ -211,11 +308,21 @@ Structured output format requested from either enterprise cloud LLM endpoints or
 }
 ```
 
+## 6.2 Route Leg Status Polling (Dispatcher Dashboard)
+The dispatcher dashboard's `SegmentControlPanel` component polls
+`GET /api/v1/batches/{batch_id}/segments` (tenant-scoped) every 5 seconds
+per batch tracked in the active `OptimizationSession` to render live
+per-phone, per-leg status across every uploaded file/batch in that
+session — this currently supplements, rather than replaces, event-driven
+WebSocket pushes for `route_legs` (no dedicated `ROUTE_LEG_UPDATED`
+Supabase Realtime channel exists yet; see Section 5.3 for the full
+`route_legs.status` state machine).
+
 # 7. Error Handling, Status Codes & Circuit Breakers
 
 | Error Code | HTTP Status | Error Category | Description & Mitigation Strategy |
 | :--- | :--- | :--- | :--- |
 | `ERR_REDLOCK_FAILED` | 409 Conflict | Concurrency | Triggered when an anonymous session attempts to claim an already locked car. Returns WhatsApp text instructing driver to pick another car. |
 | `ERR_OCR_CONFIDENCE_LOW` | 422 Unprocessable | AI Extraction | Document parsing confidence <0.80. Pushes batch to "Manual Review Queue" on Dispatcher Dashboard. |
-| `ERR_MAPBOX_TIMEOUT` | 504 Gateway Timeout | Routing API | Mapbox response >2000 ms. Fallback instantly triggers local OSRM instance. |
+| `ERR_MAPBOX_TIMEOUT` | 504 Gateway Timeout | Routing API | Mapbox response >2000 ms. Fallback instantly triggers OSRM. **Live default:** `ROUTING_PROVIDER=osrm` makes OSRM the zero-config primary provider; Mapbox is only primary if explicitly configured. A straight-line approximation (`route_provider="fallback"`) is the absolute last resort if both real providers fail. |
 | `ERR_WABA_RATE_LIMIT` | 429 Too Many Requests | Messaging | Meta API limit reached. Outbound payload requeued in BullMQ with exponential backoff (2s, 4s, 8s...). |
