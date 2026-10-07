@@ -21,6 +21,7 @@ Public architectural preview and core boilerplate of **FleetReloc** — a specia
 - Enterprise Multi-Tenancy & Data Isolation: Automated database-level query filtering and context-bound tenant separation (via SQLAlchemy event listeners and request-scoped context variables) to ensure strict data sovereignty and zero cross-tenant leaks for enterprise clients.
 
 ### Dispatch, Routing & Concurrency
+- Parallel Optimization Sessions & Multi-File Ingestion: Supports independent, parallel batch sessions per tenant, enabling dispatchers to upload multiple manifest files concurrently and group them into isolated routing streams without cross-contamination.
 - Iterative Bulk Batch & Broadcast Waves: Relocation orders structured into BulkBatch and BroadcastWave models, distributing notifications iteratively via hashed arrays.
 - Concurrency & Safety: Leverages Redis Redlock to ensure race-condition-free, First-Come-First-Served (FCFS) driver job-claiming mechanics over webhooks.
 - Resilient Routing & Ingestion: Hybrid architecture combining routing problem (VRP) optimization with structured text parsing supporting both enterprise cloud LLMs and self-hosted local inference runtimes (e.g., Ollama / vLLM) optimized for multilingual (Arabic/English) document parsing.
@@ -32,11 +33,11 @@ Public architectural preview and core boilerplate of **FleetReloc** — a specia
 FleetReloc demonstrates how to solve a core logistical challenge: coordinating multi-vehicle transport orders while maintaining absolute compliance with regional data privacy laws (GDPR/PDPL) and zero-trust security standards.
 
 1. The GCC Fleet Challenge: Managing intra-city fleet rotations (moving cars between rental branches, service centers, and airports) and dispatching local recovery/flatbed units currently relies on manual chaos, phone calls, and fragmented WhatsApp chats, leading to high vehicle downtime and human errors.
-2. Manifest Ingestion & Parsing: Dispatchers upload transport orders (manifests, spreadsheets, or images via OCR) containing vehicle details and driver contact identifiers.
+2. Multi-File Manifest Ingestion: Dispatchers can upload multiple transport orders and manifest files concurrently, routing them into dedicated, isolated optimization sessions (e.g., separating distinct regional hubs or parallel shift schedules).
 3. Zero-Trust Normalization & Hashing (`identity.py`):
    - *No PII Persistence:* Raw contact strings are intercepted at the API boundary, normalized, and mapped into a salted, irreversible driver_hash (`HMAC-SHA256`).
    - *Database Safety:* PostgreSQL stores only the driver_hash and relational statuses. Raw phone numbers or handles are never written to persistent storage or application logs.
-4. Iterative Broadcast Waves: Orders are grouped into a BulkBatch (e.g., 10–30 vehicles) and distributed in structured waves targeting hashed arrays iteratively.
+4. Iterative Broadcast Waves & Route Legs: Orders are broken down into granular route segments (RouteLeg) across independent session batches, distributing notifications iteratively across hashed arrays while supporting real-time dispatcher overrides.
 5. Race-Condition-Free Claiming (FCFS): When a driver responds via webhook, Redis Redlock coordinates atomic slot-claiming, ensuring fairness without race conditions.
 
 ---
@@ -69,7 +70,7 @@ https://github.com/user-attachments/assets/c6e52b01-9377-46be-96ed-e82c47fd0cca
 ## Core Documentation
 
 - api_protocols.md — Authoritative contracts covering webhook schemas, routing specs, error codes, and real-time event specs.
-- db_schema.md — PostgreSQL DDL definitions, state machines, and multi-tenant RLS isolation rules.
+- db_schema.md — PostgreSQL DDL definitions, route segment state machines (RouteLeg), session-based parallel stream controls, and multi-tenant isolation rules.
 
 ---
 
