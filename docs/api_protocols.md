@@ -1,4 +1,4 @@
-# 1. Executive Summary & Architecture Overview
+1. Executive Summary & Architecture Overview
 
 This document defines the interface control contracts, event-driven webhooks, and REST/gRPC payloads connecting the FleetReloc infrastructure components. The architecture isolates external third-party communication (Meta WABA, Maps, AI/LLM Inference) from core transaction processing, ensuring high throughput, deterministic concurrency handling during First-Come-First-Served (FCFS) job claiming, strict resilience against downstream service degradation, and zero-data-retention compliance via ephemeral hashing and hybrid/local AI processing nodes.
 
@@ -8,7 +8,7 @@ This document defines the interface control contracts, event-driven webhooks, an
 └────────────────────────────────────────────────────────────────────────────────────────┘
  [ External Parties ]             [ API Gateway Layer ]            [ Internal Services ]
    Meta Cloud API (WABA) ──(HTTPS)──► Ingestion Gateway ──(gRPC/REST)─► VRP Solver Engine
-   Local / Cloud LLM Node◄─(HTTPS)─── (FastAPI / Edge)  ──(WebSockets)► Supabase Realtime
+   Local Ollama (On-Prem)◄─(HTTP)──── (FastAPI / Edge)  ──(WebSockets)► Supabase Realtime
    Mapbox / OSRM API    ◄─(HTTPS)───         │                       (PostgreSQL DB)
                                              └───────(BullMQ)───────► Redis Cluster
                                                                      (Redlock & Queue)
@@ -169,6 +169,40 @@ Structured output format requested from either enterprise cloud LLM endpoints or
 > workflow in Section 7. An explicit `confidence` field (float, 0.0–1.0) is
 > also present on every manifest — see `ERR_OCR_CONFIDENCE_LOW` below.
 
+### 5.1.1 On-Premise OCR/LLM Pipeline (Strict Compliance, No Cloud)
+
+The live pipeline (`apps/api/app/utils/pdf_parser.py`) runs entirely
+on-premise -- no manifest content (vehicle data, addresses, VINs) ever
+leaves the deployment perimeter:
+
+* **OCR preprocessing (OpenCV):** every raster image (PNG/JPG/JPEG) is
+  preprocessed via `app/utils/ocr_preprocessing.py` -- grayscale
+  conversion, `cv2.fastNlMeansDenoising`, and Otsu binarization -- before
+  Tesseract OCR, improving extraction quality on low-quality phone-camera
+  scans. Falls back to the original, unprocessed image on any OpenCV
+  failure rather than aborting the pipeline.
+* **Multi-language OCR:** Tesseract runs the combined language set
+  `Settings.OCR_LANGUAGES` (default `"eng+deu+ara"`, covering DE/EN/AR
+  manifests) with automatic fallback to `Settings.OCR_FALLBACK_LANGUAGE`
+  (default `"eng"`) if the combined language pack isn't installed on the
+  host.
+* **Local Ollama (Llama 3) timeout:** `Settings.OLLAMA_TIMEOUT_SECONDS`
+  (default `120.0`) gives large manifests (10+ vehicles) enough headroom
+  to finish LLM generation without the request aborting mid-response.
+  `Settings.OLLAMA_BASE_URL`/`OLLAMA_MODEL` point at the local/on-prem
+  Ollama instance -- never a cloud endpoint.
+* **Deterministic hub-matching fallback (defensive post-processing):**
+  after JSON parsing and Pydantic structural validation succeed, every
+  extracted pickup/dropoff address is re-validated against a known-hub
+  directory (`app/utils/hub_resolver.py::KNOWN_HUBS` -- e.g. "Berlin Hub",
+  "Rostock Port Hub", "Ketzin Hub") using fuzzy string matching. This
+  corrects LLM typos/transliteration drift (e.g. "Rostok Hub" ->
+  "Rostock Port Hub") and substitutes a clearly-labeled placeholder
+  (never `None`/null) when the LLM returns a null or unresolved address,
+  so malformed LLM output is corrected deterministically in Python rather
+  than forcing a request back to the LLM or routing every imperfect
+  extraction to `manual_review`.
+
 ```json
 {
   "$schema": "[http://json-schema.org/draft-07/schema#](http://json-schema.org/draft-07/schema#)",
@@ -227,6 +261,30 @@ several files feeding one logical routing/chaining stream together —
 while each file's own parse outcome (`status`, `successful_rows`,
 `failed_rows`) stays independently auditable. See `docs/db_schema.md`
 ("Multi-file manifest uploads") for the underlying schema.
+
+### 5.2.1 Asynchronous Upload Contract (202 Accepted)
+
+`POST /api/v1/batches/upload` (non-JSON file types: PDF/PNG/JPG/JPEG)
+returns **`202 Accepted`** immediately with a placeholder `BulkBatch`
+(`status="processing"`) rather than waiting for OCR/Ollama/geocoding/
+routing to finish synchronously -- large, multi-page, multi-language
+manifests can take well over typical browser/reverse-proxy gateway
+timeouts (30-60s) to process. The heavy pipeline is scheduled via FastAPI
+`BackgroundTasks` and runs after the response is sent.
+
+Clients MUST poll `GET /api/v1/batches/{batch_id}` until `status`
+transitions out of `"processing"`:
+
+| `status` | Meaning |
+| :--- | :--- |
+| `processing` | Upload accepted; OCR/LLM/routing pipeline running in the background. |
+| `completed` | Parsing succeeded; `payload.vehicles` is populated and ready for dispatch. |
+| `manual_review` | Parsed successfully but LLM `confidence` < 0.80 -- see `ERR_OCR_CONFIDENCE_LOW`. |
+| `failed` | The background pipeline raised an unrecoverable error (e.g. malformed LLM JSON that survived all defensive layers); inspect server logs for `tenant_id`-tagged details. |
+
+JSON-file uploads (`.json`) are handled synchronously (no OCR/LLM work
+required) and also return `202 Accepted` for API consistency, but the
+final `BulkBatch` is already fully populated in that same response.
 
 * `GET /api/v1/sessions/` — list all `OptimizationSession` streams for the
   caller's tenant (strictly tenant-scoped via the automatic ORM filter).
