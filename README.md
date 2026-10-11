@@ -22,7 +22,7 @@ Public architectural preview and core boilerplate of **FleetReloc** — a specia
 
 ### Dispatch, Routing & Concurrency
 - Parallel Optimization Sessions & Multi-File Ingestion: Supports independent, parallel batch sessions per tenant, enabling dispatchers to upload multiple manifest files concurrently and group them into isolated routing streams without cross-contamination.
-- Iterative Bulk Batch & Broadcast Waves: Relocation orders structured into BulkBatch and BroadcastWave models, distributing notifications iteratively via hashed arrays.
+- Sequential Leg Waves & Interactive Dispatch: Relocation orders are structured into strict multi-leg chains (RouteLeg ordered by sequence_order). Driver broadcasts are delivered sequentially by waves (offering Leg 1 first, unlocking Leg 2+ only after confirmation) with interactive Telegram Inline Keyboards allowing drivers to choose their role (Drive vs Passenger / Co-Driver).
 - Concurrency & Safety: Leverages Redis Redlock to ensure race-condition-free, First-Come-First-Served (FCFS) driver job-claiming mechanics over webhooks.
 - Resilient On-Premise OCR & Hybrid Parsing Pipeline: Strict privacy-first parsing engine running completely within the local perimeter (no cloud dependencies) combining:
   - **OpenCV Preprocessing:** Automated grayscale conversion, `cv2.fastNlMeansDenoising`, and Otsu binarization prior to OCR.
@@ -42,7 +42,7 @@ FleetReloc demonstrates how to solve a core logistical challenge: coordinating m
 3. Zero-Trust Normalization & Hashing (`identity.py`):
    - *No PII Persistence:* Raw contact strings are intercepted at the API boundary, normalized, and mapped into a salted, irreversible driver_hash (`HMAC-SHA256`).
    - *Database Safety:* PostgreSQL stores only the driver_hash and relational statuses. Raw phone numbers or handles are never written to persistent storage or application logs.
-4. Iterative Broadcast Waves & Route Legs: Orders are broken down into granular route segments (`RouteLeg`) across independent session batches, distributing notifications iteratively across hashed arrays while supporting real-time dispatcher overrides.
+4. Sequential Leg Waves & Route Legs (RouteLeg): Orders are broken down into granular, ordered route segments. Dispatch notifications are dispatched sequentially by leg waves (sequence_order = 1, then unlocking subsequent legs upon confirmation) with interactive role selection for multi-leg vehicle rotations.
 5. Race-Condition-Free Claiming (FCFS): When a driver responds via webhook, Redis Redlock coordinates atomic slot-claiming, ensuring fairness without race conditions.
 
 ---
