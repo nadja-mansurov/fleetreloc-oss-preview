@@ -293,7 +293,7 @@ final `BulkBatch` is already fully populated in that same response.
   session does not belong to the caller's tenant.
 
 A dispatcher can run **2+ independent, parallel** `OptimizationSession`
-streams simultaneously (e.g. a Ketzyn→Berlin stream alongside a
+streams simultaneously (e.g. a Ketzin→Berlin stream alongside a
 Frankfurt→Hamburg stream) without any cross-contamination: every
 `route_legs` row carries a mandatory `session_id`, and backhaul-chaining
 offers (Section 5.3) are only ever matched within the same
@@ -343,22 +343,32 @@ pending ──▶ claimed_driver ──▶ passenger_offered ──▶ claimed_p
 # 6. Realtime WebSockets & Event Specifications (Supabase)
 
 ## 6.1 Dispatcher Command Center WebSocket Events
-* **Channel:** `realtime:public:vehicles:batch_id=eq.{BATCH_ID}`
-* **Event Payload:** `VEHICLE_CLAIMED` (Broadcasted to the Desktop Web Dashboard when a vehicle transitions from unassigned to assigned).
+* **Channel:** `realtime:public:batch_vehicles:batch_id=eq.{BATCH_ID}`
+* **Event Payload:** `VEHICLE_CLAIMED` (Broadcasted to the Desktop Web Dashboard when a relocation TASK transitions from unassigned to assigned).
+
+> **Note (normalized vehicle split):** the claimable/assignable entity is
+> a `batch_vehicles` row (one specific relocation TASK -- a leg, in a
+> batch), NOT the global `vehicles` registry row. The same physical
+> vehicle (`vehicles.id` / VIN) may have several independent
+> `batch_vehicles` tasks -- e.g. one per leg of a Multi-Leg Relay chain --
+> each claimable/assignable on its own. See `docs/db_schema.md` for the
+> full registry/task split.
 
 ```json
 {
   "event": "UPDATE",
   "schema": "public",
-  "table": "vehicles",
+  "table": "batch_vehicles",
   "commit_timestamp": "2026-08-20T10:14:22.102Z",
   "old": {
     "id": "a9b8c7d6-e5f4-3a2b-1c0d-9e8f7a6b5c4d",
+    "vehicle_id": "f1e2d3c4-b5a6-4978-8675-309281726354",
     "status": "unassigned",
     "assigned_driver_hash": null
   },
   "new": {
     "id": "a9b8c7d6-e5f4-3a2b-1c0d-9e8f7a6b5c4d",
+    "vehicle_id": "f1e2d3c4-b5a6-4978-8675-309281726354",
     "status": "assigned",
     "assigned_driver_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "locked_until": null
