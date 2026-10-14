@@ -1,7 +1,3 @@
-
-
-https://github.com/user-attachments/assets/ad5d8a1c-17e1-40af-8525-764208e3afb2
-
 # FleetReloc OSS Preview
 
 Disclaimer: This repository is an independent, personal R&D portfolio project developed strictly on my own time, using my own personal equipment, and without any relation, contribution, or connection to any current or past employers. All concepts, code structures, and architectures presented here are autonomous technical explorations and do not utilize proprietary employer resources or trade secrets.
