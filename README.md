@@ -1,3 +1,7 @@
+
+
+https://github.com/user-attachments/assets/ad5d8a1c-17e1-40af-8525-764208e3afb2
+
 # FleetReloc OSS Preview
 
 Disclaimer: This repository is an independent, personal R&D portfolio project developed strictly on my own time, using my own personal equipment, and without any relation, contribution, or connection to any current or past employers. All concepts, code structures, and architectures presented here are autonomous technical explorations and do not utilize proprietary employer resources or trade secrets.
@@ -104,8 +108,7 @@ FleetReloc features dynamic route visualization and distance calculation.
 
 > Watch how the FleetReloc dispatcher dashboard works in action—featuring instant language switching (English / RTL Arabic), transport manifest uploading, iterative driver broadcasts via Telegram, and real-time status tracking:
 
-
-<video src="https://github.com/nadja-mansurov/fleetreloc-oss-preview/raw/main/docs/demo1014.mp4" controls width="100%"></video>
+https://github.com/user-attachments/assets/f9bc4038-2838-4138-82be-354e70f04485
 
 ---
 
