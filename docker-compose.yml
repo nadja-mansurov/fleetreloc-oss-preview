@@ -1,10 +1,10 @@
-version: "3.9"
-
 # Local development stack for FleetReloc.
 # Provisions PostgreSQL (Supabase-compatible schema, see docs/db_schema.md)
 # and Redis (Redlock + BullMQ-compatible queue, see docs/api_protocols.md).
-# The api/web services are included for convenience; they can also be run
-# natively (uvicorn / npm run dev) against these two services.
+# The api/web services build from apps/api and apps/web, which are not part
+# of this public preview, so they sit behind the "app" profile:
+#   docker compose up                  -> postgres + redis only
+#   docker compose --profile app up    -> full stack (requires apps/)
 
 services:
   postgres:
@@ -45,9 +45,11 @@ services:
       context: ./apps/api
       dockerfile: Dockerfile
     container_name: fleetreloc-api
+    profiles: ["app"]
     restart: unless-stopped
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fleetreloc}:${POSTGRES_PASSWORD:-fleetreloc}@postgres:5432/${POSTGRES_DB:-fleetreloc}
       REDIS_URL: redis://redis:6379/0
@@ -66,9 +68,11 @@ services:
       context: ./apps/web
       dockerfile: Dockerfile
     container_name: fleetreloc-web
+    profiles: ["app"]
     restart: unless-stopped
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       NEXT_PUBLIC_API_BASE_URL: http://localhost:8000/api/v1
     ports:

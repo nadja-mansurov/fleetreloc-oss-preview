@@ -54,10 +54,10 @@
   import/parse outcome (`status`, `successful_rows`, `failed_rows`,
   `payload`) remains independently auditable per batch.
 - **Route leg state machine**: `route_legs.status` is constrained by a
-  Postgres `CHECK` constraint (`ck_route_legs_status`) to exactly:
-  `pending → claimed_driver | rejected`, and `pending → passenger_offered →
-  claimed_passenger` for round-trip backhaul chaining offered after a
-  driver claims the outbound leg. See the state diagram in
+  Postgres `CHECK` constraint (`ck_route_legs_status`) to exactly five
+  values. An outbound leg moves `pending → claimed_driver | rejected`; once
+  it is claimed, the matching round-trip backhaul leg moves `pending →
+  passenger_offered → claimed_passenger`. See the state diagram in
   [Route Leg State Machine](#route-leg-state-machine-route_legsstatus) below.
 - **Zero-PII**: no table in this schema ever stores a raw phone number.
   `batch_vehicles.driver_hash`, `drivers.driver_hash`, and
@@ -122,7 +122,7 @@ CREATE TABLE bulk_batches (
     successful_rows INTEGER NOT NULL DEFAULT 0,
     failed_rows INTEGER NOT NULL DEFAULT 0,
     claimed_count INTEGER NOT NULL DEFAULT 0,
-    status VARCHAR NOT NULL DEFAULT 'processing',    -- processing | ready | broadcasting | completed | expired | manual_review
+    status VARCHAR NOT NULL DEFAULT 'processing',    -- processing | ready | broadcasting | completed | expired | manual_review | failed
     payload JSONB,                                   -- parsed vehicles/waypoints/locations/drivers (OCR/manifest output)
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -348,38 +348,22 @@ companies (tenant)
 ## Route Leg State Machine (`route_legs.status`)
 
 Enforced at the database level by the `ck_route_legs_status` CHECK
-constraint — only these five values are ever valid:
+constraint — only these five values are ever valid. The outbound leg and
+its matching round-trip backhaul leg are separate `route_legs` rows, each
+with its own status:
 
 ```
-                 ┌──────────┐
-   driver claim  │          │  dispatcher "Retry"
-   ┌────────────▶│ pending  │◀────────────────────────────┐
-   │             │          │                              │
-   │             └────┬─────┘                              │
-   │                  │                                    │
-   │       driver claims outbound leg                      │
-   │                  │                                    │
-   │                  ▼                                    │
-   │          ┌────────────────┐        driver rejects     │
-   │          │ claimed_driver │───────────────────────────┤
-   │          └───────┬────────┘                           │
-   │                  │                                    │
-   │     round-trip backhaul auto-offered                  │
-   │     (same tenant_id + session_id only)                │
-   │                  ▼                                    │
-   │       ┌────────────────────┐                          │
-   │       │ passenger_offered  │                           │
-   │       └──────────┬─────────┘                          │
-   │                  │                                    │
-   │       passenger/driver claims backhaul                │
-   │                  ▼                                    │
-   │       ┌─────────────────────┐                         │
-   └───────│ claimed_passenger   │                          │
-           └─────────────────────┘                         │
-                                                             │
-                 ┌──────────┐                               │
-                 │ rejected │───────────────────────────────┘
-                 └──────────┘   dispatcher "Retry" resets to pending
+Outbound leg:
+
+  pending ──── driver claims ────▶ claimed_driver
+   │   ▲                                │
+   │   └── dispatcher Retry / unassign ─┘
+   │
+   └──── driver rejects ────▶ rejected ── dispatcher Retry ──▶ pending
+
+Matching backhaul leg (destination → origin, same tenant_id + session_id only):
+
+  pending ── outbound leg claimed ──▶ passenger_offered ── backhaul claimed ──▶ claimed_passenger
 ```
 
 - **`pending`** — default state on leg creation; eligible for FCFS
@@ -390,28 +374,22 @@ constraint — only these five values are ever valid:
   matching round-trip backhaul leg within the **same** `(tenant_id,
   session_id)`.
 - **`rejected`** — set when a driver explicitly declines the leg via the
-  Telegram webhook; a dispatcher can reset it back to `pending` via
-  `POST /api/v1/batches/{batch_id}/segments/{leg_id}/retry`.
+  Telegram webhook.
 - **`passenger_offered`** — set automatically on the matching backhaul leg
   (destination → origin) once the outbound leg is claimed, so it enters
   the round-trip chaining offer pool for a return passenger/driver.
 - **`claimed_passenger`** — terminal state once the backhaul leg itself is
   claimed.
-- Dispatcher manual controls (`apps/api/app/api/v1/endpoints/batches.py`):
-  - `POST /api/v1/batches/{batch_id}/segments/{leg_id}/retry` — resets a
-    leg to `pending` and clears `driver_phone`, strictly verified against
-    `(tenant_id, batch_id, leg_id)` before mutation.
-  - `DELETE /api/v1/batches/{batch_id}/segments/{leg_id}/driver` —
-    unassigns the current `driver_phone` and resets to `pending`, under
-    the same strict tenant/batch/leg verification.
-
+- Dispatcher manual controls (Retry / unassign driver, implemented in
+  `apps/api/app/api/v1/endpoints/batches.py`) reset a `rejected` or
+  `claimed_driver` leg back to `pending`; see `docs/api_protocols.md`
+  §5.3 ("Dispatcher Manual Controls") for the endpoint contracts.
 
 ## Multi-Tenant Isolation Enforcement
 
 1. **Column-level**: `tenant_id` is `NOT NULL` with a `FOREIGN KEY →
    companies(id) ON DELETE CASCADE` on every `TenantScopedMixin` table
-   (`optimization_sessions`, `bulk_batches`, `vehicles`, `batch_vehicles`,
-   `routes`, `route_legs`, `drivers`).
+   (listed in [Architecture Overview](#architecture-overview)).
 2. **Query-level (automatic)**: `apps/api/app/db/tenant_filter.py` installs
    a `do_orm_execute` SQLAlchemy event listener that injects
    `with_loader_criteria(TenantScopedMixin, tenant_id == <current
