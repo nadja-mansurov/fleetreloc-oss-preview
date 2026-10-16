@@ -139,6 +139,7 @@ venv.bak
 ehthumbs.db
 Thumbs.db
 
-# Next.js build output
+# Node / Next.js
+node_modules/
 apps/web/.next/
 apps/web/out/

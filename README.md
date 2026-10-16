@@ -54,45 +54,7 @@ FleetReloc features dynamic route visualization and distance calculation.
   ```env
   ROUTING_PROVIDER=osrm
   # Public endpoint used for quick out-of-the-box evaluations:
-  OSRM_BASE_URL=[https://router.project-osrm.org/route/v1/driving](https://router.project-osrm.org/route/v1/driving)
-  # Or local Docker container for isolated environments:
-  # OSRM_BASE_URL=http://osrm-backend:5000/route/v1/driving
-### Security, Identity & Data Sovereignty
-- Zero-Trust Identity & Hashing Core: Strict data ingestion pipeline mapping raw contacts into irreversible HMAC-SHA256 driver_hash identifiers at the API boundary for full GDPR/PDPL compliance, ensuring no raw PII ever hits persistent storage.
-- Ephemeral Redis Storage: Driver phone numbers and session mapping are handled ephemerally via Redis with strict TTL, keeping persistent databases clear of permanent personal data.
-- Demo Magic Number Routing: Isolated configuration override (`DEMO_MAGIC_PHONE`) for safe live presentations and automated end-to-end testing.
-- Enterprise Multi-Tenancy & Data Isolation: Automated database-level query filtering and context-bound tenant separation (via SQLAlchemy event listeners and request-scoped context variables) to ensure strict data sovereignty and zero cross-tenant leaks for enterprise clients.
-
-### Dispatch, Routing & Concurrency
-- Parallel Optimization Sessions & Multi-File Ingestion: Supports independent, parallel batch sessions per tenant, enabling dispatchers to upload multiple manifest files concurrently and group them into isolated routing streams without cross-contamination.
-- Iterative Bulk Batch & Broadcast Waves: Relocation orders structured into BulkBatch and BroadcastWave models, distributing notifications iteratively via hashed arrays.
-- Concurrency & Safety: Leverages Redis Redlock to ensure race-condition-free, First-Come-First-Served (FCFS) driver job-claiming mechanics over webhooks.
-- Resilient Routing & Ingestion: Hybrid architecture combining routing problem (VRP) optimization with structured text parsing supporting both enterprise cloud LLMs and self-hosted local inference runtimes (e.g., Ollama / vLLM) optimized for multilingual (Arabic/English) document parsing.
-- Messenger-First Workflow & Pluggable Notifications: Built around a messenger-first user experience where field drivers receive tasks and interact via chat without installing heavy apps. The decoupled engine (DriverNotifier interface) currently powers fast MVP iteration and live demos via Telegram Bot API, while being architecturally primed to scale instantly to WhatsApp Business API for production deployments across Saudi Arabia and the UAE.
----
-
-## How It Works: Zero-Trust Ingestion & Dispatch Flow
-
-FleetReloc demonstrates how to solve a core logistical challenge: coordinating multi-vehicle transport orders while maintaining absolute compliance with regional data privacy laws (GDPR/PDPL) and zero-trust security standards.
-
-1. The GCC Fleet Challenge: Managing intra-city fleet rotations (moving cars between rental branches, service centers, and airports) and dispatching local recovery/flatbed units currently relies on manual chaos, phone calls, and fragmented WhatsApp chats, leading to high vehicle downtime and human errors.
-2. Multi-File Manifest Ingestion: Dispatchers can upload multiple transport orders and manifest files concurrently, routing them into dedicated, isolated optimization sessions (e.g., separating distinct regional hubs or parallel shift schedules).
-3. Zero-Trust Normalization & Hashing (`identity.py`):
-   - *No PII Persistence:* Raw contact strings are intercepted at the API boundary, normalized, and mapped into a salted, irreversible driver_hash (`HMAC-SHA256`).
-   - *Database Safety:* PostgreSQL stores only the driver_hash and relational statuses. Raw phone numbers or handles are never written to persistent storage or application logs.
-4. Iterative Broadcast Waves & Route Legs: Orders are broken down into granular route segments (RouteLeg) across independent session batches, distributing notifications iteratively across hashed arrays while supporting real-time dispatcher overrides.
-5. Race-Condition-Free Claiming (FCFS): When a driver responds via webhook, Redis Redlock coordinates atomic slot-claiming, ensuring fairness without race conditions.
-
----
-
-## 🗺️ Routing & Geolocation
-FleetReloc features dynamic route visualization and distance calculation. 
-- **Default Provider:** By default, the application connects to the open-source OSRM routing engine to fetch real-road geometries, distances, and ETAs.
-- **Configuration (.env):** Easily switchable via environment variables depending on the deployment environment:
-  ```env
-  ROUTING_PROVIDER=osrm
-  # Public endpoint used for quick out-of-the-box evaluations:
-  OSRM_BASE_URL=[https://router.project-osrm.org/route/v1/driving](https://router.project-osrm.org/route/v1/driving)
+  OSRM_BASE_URL=https://router.project-osrm.org/route/v1/driving
   # Or local Docker container for isolated environments:
   # OSRM_BASE_URL=http://osrm-backend:5000/route/v1/driving
   ```
@@ -104,20 +66,24 @@ FleetReloc features dynamic route visualization and distance calculation.
 
 > Watch how the FleetReloc dispatcher dashboard works in action—featuring instant language switching (English / RTL Arabic), transport manifest uploading, iterative driver broadcasts via Telegram, and real-time status tracking:
 
-<video src="https://github.com/nadja-mansurov/fleetreloc-oss-preview/blob/main/docs/demo1004.mov" controls width="100%"></video>
+<video src="https://github.com/nadja-mansurov/fleetreloc-oss-preview/raw/main/demo/demo1014.mp4" controls width="100%"></video>
+
+If the player does not load, [download the demo video](demo/demo1014.mp4).
 
 ---
 
 ## Core Documentation
 
-- api_protocols.md — Authoritative contracts covering webhook schemas, routing specs, error codes, and real-time event specs.
-- db_schema.md — PostgreSQL DDL definitions, route segment state machines (RouteLeg), session-based parallel stream controls, and multi-tenant isolation rules.
+- [api_protocols.md](docs/api_protocols.md) — Authoritative contracts covering webhook schemas, routing specs, error codes, and real-time event specs.
+- [db_schema.md](docs/db_schema.md) — PostgreSQL DDL definitions, route segment state machines (RouteLeg), session-based parallel stream controls, and multi-tenant isolation rules.
 
 ---
 
 ## Sample Ingestion Document
 
 Here is a synthetic example of a bilingual (English/Arabic) transport manifest (`local_order_ksa.png`) processed by the OCR and LLM pipeline to automatically extract batch payloads, vehicles (Hyundai, Toyota), and Riyadh-based coordinates:
+
+![Synthetic bilingual transport manifest](docs/samples/local_order_ksa.png)
 
 *(All company names, Commercial Registration (CR) numbers, and addresses shown in the sample above are entirely synthetic and generated solely for R&D demonstration purposes).*
 

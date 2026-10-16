@@ -1,4 +1,4 @@
-1. Executive Summary & Architecture Overview
+# 1. Executive Summary & Architecture Overview
 
 This document defines the interface control contracts, event-driven webhooks, and REST/gRPC payloads connecting the FleetReloc infrastructure components. The architecture isolates external third-party communication (Meta WABA, Maps, AI/LLM Inference) from core transaction processing, ensuring high throughput, deterministic concurrency handling during First-Come-First-Served (FCFS) job claiming, strict resilience against downstream service degradation, and zero-data-retention compliance via ephemeral hashing and hybrid/local AI processing nodes.
 
@@ -21,7 +21,7 @@ This document defines the interface control contracts, event-driven webhooks, an
   * *WhatsApp Inbound Webhooks:* Uncapped burst limit (up to 100 req/sec) with IP whitelisting matching Meta Cloud API IP ranges.
   * *Dispatcher Dashboard REST/GraphQL API:* 60 requests/minute per authenticated user session.
 
-## 2.2 External Webhook Verification (WhatsApp / Twilio)
+## 2.2 External Webhook Verification (WhatsApp / Meta Cloud API)
 * **Requirement:** All incoming webhooks from Meta Cloud API must undergo HMAC-SHA256 signature verification before pushing payload to BullMQ queue.
 * **Header:** `X-Hub-Signature-256`
 * **Verification Logic:** `HMAC_SHA256(APP_SECRET, RAW_REQUEST_BODY) == HEADER_SIGNATURE`
@@ -140,8 +140,8 @@ Used for real-time recalculation when a driver claims a vehicle via FCFS button 
       "convoy_lead_driver_hash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
       "return_vehicle_vin": "WAUZZZ4G0BN123456",
       "rendezvous_location": {
-        "lat": 50.112000,
-        "lng": 8.685000
+        "lat": 24.455000,
+        "lng": 54.380000
       },
       "estimated_departure": "2026-08-20T14:30:00Z",
       "cost_savings_eur": 42.50
@@ -150,7 +150,7 @@ Used for real-time recalculation when a driver claims a vehicle via FCFS button 
 }
 ```
 
-# 5. Bulk Document Parsing Protocols (PyMuPDF & Hybrid LLM / Local Inference)
+# 5. Bulk Document Parsing Protocols (OCR & Hybrid LLM / Local Inference)
 
 ## 5.1 OCR & Structured Extraction Contract
 Structured output format requested from either enterprise cloud LLM endpoints or self-hosted local inference runtimes (e.g., Ollama/vLLM via OpenAI-compatible endpoints) with strict JSON Schema enforcement during PDF/Excel manifest ingestion.
@@ -205,7 +205,7 @@ leaves the deployment perimeter:
 
 ```json
 {
-  "$schema": "[http://json-schema.org/draft-07/schema#](http://json-schema.org/draft-07/schema#)",
+  "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "BulkOrderManifest",
   "type": "object",
   "properties": {
@@ -301,29 +301,15 @@ offers (Section 5.3) are only ever matched within the same
 
 ## 5.3 Route Leg State Machine & Round-Trip Backhaul Chaining
 
-Multi-leg route segments are tracked in the `route_legs` table (see
-`docs/db_schema.md`), constrained by the `ck_route_legs_status` CHECK
-constraint to exactly five states:
-
-```
-pending ──▶ claimed_driver ──▶ passenger_offered ──▶ claimed_passenger
-   ▲               │
-   │               ▼
-   └────────── rejected
-```
-
-* **`pending`** — default state; eligible for FCFS claiming.
-* **`claimed_driver`** — set when a driver claims the outbound leg via the
-  Telegram webhook (`apps/api/app/api/v1/endpoints/telegram.py`), strictly
-  scoped to `(tenant_id, batch_id)`. This automatically triggers a lookup
-  for a matching round-trip backhaul leg (destination → origin) within the
-  **same** `(tenant_id, session_id)` — never across tenants or sessions.
-* **`rejected`** — set when a driver explicitly declines the leg.
-* **`passenger_offered`** — set automatically on the matching backhaul leg
-  once the outbound leg is claimed, entering the round-trip chaining offer
-  pool for a return passenger/driver.
-* **`claimed_passenger`** — terminal state once the backhaul leg itself is
-  claimed.
+Multi-leg route segments are tracked in the `route_legs` table, whose
+`status` is constrained by the `ck_route_legs_status` CHECK constraint to
+five states (`pending`, `claimed_driver`, `rejected`, `passenger_offered`,
+`claimed_passenger`). Claiming an outbound leg via the Telegram webhook
+(`apps/api/app/api/v1/endpoints/telegram.py`) automatically offers the
+matching round-trip backhaul leg (destination → origin) within the
+**same** `(tenant_id, session_id)` — never across tenants or sessions.
+See `docs/db_schema.md` ("Route Leg State Machine") for the full state
+diagram and transition rules.
 
 ### Dispatcher Manual Controls
 
@@ -364,7 +350,8 @@ pending ──▶ claimed_driver ──▶ passenger_offered ──▶ claimed_p
     "id": "a9b8c7d6-e5f4-3a2b-1c0d-9e8f7a6b5c4d",
     "vehicle_id": "f1e2d3c4-b5a6-4978-8675-309281726354",
     "status": "unassigned",
-    "assigned_driver_hash": null
+    "assigned_driver_hash": null,
+    "locked_until": null
   },
   "new": {
     "id": "a9b8c7d6-e5f4-3a2b-1c0d-9e8f7a6b5c4d",
