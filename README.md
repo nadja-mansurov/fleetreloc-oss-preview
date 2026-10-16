@@ -66,9 +66,7 @@ FleetReloc features dynamic route visualization and distance calculation.
 
 > Watch how the FleetReloc dispatcher dashboard works in action—featuring instant language switching (English / RTL Arabic), transport manifest uploading, iterative driver broadcasts via Telegram, and real-time status tracking:
 
-<video src="https://github.com/nadja-mansurov/fleetreloc-oss-preview/raw/main/demo/demo1014.mp4" controls width="100%"></video>
-
-If the player does not load, [download the demo video](demo/demo1014.mp4).
+https://github.com/user-attachments/assets/f9bc4038-2838-4138-82be-354e70f04485
 
 ---
 
