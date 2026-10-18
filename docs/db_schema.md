@@ -1,13 +1,18 @@
 # Database Schema & Order State Machine (Multi-Tenant / Zero-Trust Architecture)
 
+> **Synthetic data:** all example values in this document (companies, addresses, vehicles, VINs, plates, phone numbers, hashes and IDs) are synthetic, generated for R&D demonstration only. See the synthetic data notice in the [README](../README.md).
+
+Keycloak (dashboard login) keeps its own data in a separate database with
+its own user in production; it shares no tables or credentials with this
+schema.
+
 ## Architecture Overview
 
 - **Multi-tenancy**: every tenant-owned table (`optimization_sessions`,
-  `bulk_batches`, `vehicles`, `batch_vehicles`, `routes`, `route_legs`,
+  `bulk_batches`, `vehicles`, `batch_vehicles`, `route_legs`,
   `drivers`) carries a mandatory `tenant_id` column, `NOT NULL`, `FOREIGN
-  KEY → companies.id ON DELETE CASCADE`, and declares `TenantScopedMixin`
-  (see `apps/api/app/models/mixins.py`). An automatic SQLAlchemy event
-  listener (`apps/api/app/db/tenant_filter.py`) injects `tenant_id ==
+  KEY → companies.id ON DELETE CASCADE`, and declares `TenantScopedMixin`.
+  An automatic SQLAlchemy event listener injects `tenant_id ==
   <current tenant>` into **every** ORM `select`/`update`/`delete` against
   these tables, so a developer forgetting an explicit filter can no longer
   leak cross-tenant rows. Queries with no tenant bound to the current
@@ -22,8 +27,7 @@
     physical vehicle per tenant (`vin`, `make_model`, `license_plate`
     only). Enforced unique via a **partial** unique index,
     `uq_vehicles_tenant_vin_known`, on `(tenant_id, vin) WHERE vin <>
-    'UNKNOWN'` — deliberately excluding the `"UNKNOWN"` placeholder VIN
-    (see `apps/api/app/utils/vehicle_normalization.py::UNKNOWN_VIN`) so
+    'UNKNOWN'` — deliberately excluding the `"UNKNOWN"` placeholder VIN so
     manifests with an unresolved VIN never collide with each other.
   - **`batch_vehicles`** (the **transactional task/link table**, the
     direct successor of the old flat `vehicles` table) — one row per
@@ -33,38 +37,33 @@
     constraint**, so the exact same physical vehicle can have many
     `batch_vehicles` rows — one per leg of a Multi-Leg Relay chain —
     without ever raising `UniqueViolationError`.
-  - Every import path (Excel/CSV, OCR/LLM manifest pipeline, single-PDF
-    orders, direct API `POST /api/v1/vehicles/`) resolves/creates the
-    registry row via `VehicleRegistryService.get_or_create_vehicle`
-    (`apps/api/app/services/vehicle_registry_service.py`, an atomic
-    Postgres `INSERT ... ON CONFLICT (tenant_id, vin) WHERE vin <>
+  - Every import path (`POST /api/v1/batches/upload` for JSON/Excel/CSV and
+    the OCR/LLM pipeline, direct API `POST /api/v1/vehicles/`) resolves/creates the
+    registry row via an atomic Postgres `INSERT ... ON CONFLICT (tenant_id, vin) WHERE vin <>
     'UNKNOWN' DO UPDATE` upsert) and then creates a fresh,
     unconstrained `batch_vehicles` row for the task.
 - **Parallel optimization sessions**: `optimization_sessions` is the parent
   grouping that lets one dispatcher run two or more independent,
-  concurrent routing/chaining streams (e.g. a Ketzin→Berlin stream and a
-  Frankfurt→Hamburg stream) without cross-contamination. `bulk_batches`
+  concurrent routing/chaining streams (e.g. a Riyadh→Jeddah stream and a
+  Dubai→Abu Dhabi stream) without cross-contamination. `bulk_batches`
   and `route_legs` both carry a `session_id`, and `route_legs` additionally
   enforces `session_id` as mandatory (`NOT NULL`) so every segment is
   strictly scoped to one stream.
-- **Multi-file manifest uploads**: a single `optimization_sessions` row can
-  own many `bulk_batches` rows (one per uploaded file/manifest) via the
-  `bulk_batches.session_id` foreign key, allowing concurrent multi-file
-  uploads to be grouped and tracked together while each file's own
-  import/parse outcome (`status`, `successful_rows`, `failed_rows`,
-  `payload`) remains independently auditable per batch.
+- **Multi-file manifest uploads**: a single `optimization_sessions` row owns
+  one `bulk_batches` row **per leg** (files tagged with the same leg number
+  are merged into that leg's batch), via `bulk_batches.session_id`. Each
+  batch's outcome (`status`, `successful_rows`, `failed_rows`, `payload`)
+  is tracked per leg.
 - **Route leg state machine**: `route_legs.status` is constrained by a
-  Postgres `CHECK` constraint (`ck_route_legs_status`) to exactly five
-  values. An outbound leg moves `pending → claimed_driver | rejected`; once
-  it is claimed, the matching round-trip backhaul leg moves `pending →
-  passenger_offered → claimed_passenger`. See the state diagram in
-  [Route Leg State Machine](#route-leg-state-machine-route_legsstatus) below.
+  Postgres `CHECK` constraint (`ck_route_legs_status`) to five values; the
+  code uses `pending`, `claimed_driver`, `claimed_passenger` and `rejected`.
+  See [Route Leg State Machine](#route-leg-state-machine-route_legsstatus).
 - **Zero-PII**: no table in this schema ever stores a raw phone number.
   `batch_vehicles.driver_hash`, `drivers.driver_hash`, and
-  `route_legs.driver_phone` store only an HMAC-SHA256 hash derived via
-  `apps/api/app/core/security.py::generate_driver_hash`. Raw phone numbers
-  live transiently (24h TTL) only in Redis — see
-  `apps/api/app/services/driver_session_service.py`.
+  `route_legs.driver_phone` store only a keyed HMAC-SHA256 hash. Redis
+  holds hashes too (chat ↔ driver_hash links, pending offers): raw phone
+  numbers are stored nowhere. A migration scrubbed raw phones from older
+  payloads.
 
 ## PostgreSQL Schema (Live DDL, reconstructed from `information_schema`)
 
@@ -74,17 +73,14 @@
 CREATE TABLE companies (
     id TEXT PRIMARY KEY,
     email TEXT UNIQUE NOT NULL,
-    stripe_customer_id TEXT,
-    stripe_subscription_id TEXT,
-    plan_tier TEXT NOT NULL DEFAULT 'free',          -- free | starter | pro
-    messages_used INTEGER NOT NULL DEFAULT 0,
+    -- (billing / plan columns omitted from this public preview)
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
 -- 1. OPTIMIZATION_SESSIONS (Parallel dispatcher streams) -----------------
 -- Parent grouping allowing a dispatcher to run 2+ independent, concurrent
 -- routing/chaining streams without cross-contaminating their batches or
--- route legs. See apps/api/app/models/session.py.
+-- route legs.
 CREATE TABLE optimization_sessions (
     id UUID PRIMARY KEY,
     tenant_id VARCHAR NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
@@ -122,10 +118,13 @@ CREATE TABLE bulk_batches (
     successful_rows INTEGER NOT NULL DEFAULT 0,
     failed_rows INTEGER NOT NULL DEFAULT 0,
     claimed_count INTEGER NOT NULL DEFAULT 0,
-    status VARCHAR NOT NULL DEFAULT 'processing',    -- processing | ready | broadcasting | completed | expired | manual_review | failed
+    status VARCHAR NOT NULL DEFAULT 'processing',    -- processing | ready | manual_review | failed | broadcasting | completed
     payload JSONB,                                   -- parsed vehicles/waypoints/locations/drivers (OCR/manifest output)
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    -- Target of batch_vehicles' same-tenant foreign key (below).
+    CONSTRAINT uq_bulk_batches_id_tenant UNIQUE (id, tenant_id)
 );
 
 CREATE INDEX ix_bulk_batches_tenant_id ON bulk_batches(tenant_id);
@@ -193,12 +192,13 @@ CREATE TABLE batch_vehicles (
     dropoff_deadline TIMESTAMPTZ NOT NULL,
 
     -- State & Hashed/Anonymized Assignment (Zero Trust: no raw phone/name stored)
-    status VARCHAR DEFAULT 'unassigned'
+    status VARCHAR NOT NULL DEFAULT 'unassigned'
+        CONSTRAINT vehicles_status_check
         CHECK (status IN ('unassigned', 'locked', 'assigned', 'in_transit', 'delivered', 'cancelled')),
     driver_hash VARCHAR,     -- HMAC-SHA256 hashed phone/session token (Zero PII retention)
 
-    locked_until TIMESTAMPTZ,
-    created_at TIMESTAMPTZ DEFAULT now(),
+    locked_until TIMESTAMPTZ,   -- unused by the current claim flow (atomic UPDATE, no locks)
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     -- Real-road routing metadata (Mapbox/OSRM; replaces straight-line
@@ -207,7 +207,12 @@ CREATE TABLE batch_vehicles (
     distance_km DOUBLE PRECISION,
     duration_minutes DOUBLE PRECISION,
     route_geometry JSONB,          -- ordered [lon, lat] polyline (GeoJSON LineString convention)
-    route_provider VARCHAR         -- "mapbox" | "osrm" | "fallback"
+    route_provider VARCHAR,        -- "mapbox" | "osrm" | "fallback"
+
+    -- A task's batch must belong to the task's tenant (NULL batch_id is not
+    -- checked): cross-tenant task -> batch links are impossible.
+    CONSTRAINT fk_batch_vehicles_batch_same_tenant
+        FOREIGN KEY (batch_id, tenant_id) REFERENCES bulk_batches(id, tenant_id) ON DELETE CASCADE
 );
 
 CREATE INDEX ix_batch_vehicles_tenant_id ON batch_vehicles(tenant_id);
@@ -215,26 +220,9 @@ CREATE INDEX ix_batch_vehicles_tenant_batch ON batch_vehicles(tenant_id, batch_i
 CREATE INDEX ix_batch_vehicles_tenant_vehicle ON batch_vehicles(tenant_id, vehicle_id);
 CREATE INDEX ix_batch_vehicles_tenant_status ON batch_vehicles(tenant_id, status);
 
--- 4. ROUTES (Computed/optimized route per batch) ------------------------
-CREATE TABLE routes (
-    id UUID PRIMARY KEY,
-    tenant_id VARCHAR NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-    batch_id UUID NOT NULL REFERENCES bulk_batches(id) ON DELETE CASCADE,
-    assigned_driver_hash VARCHAR,   -- driver_hash, never a raw phone number
-    distance_km DOUBLE PRECISION,
-    duration_minutes DOUBLE PRECISION,
-    waypoints JSONB,
-    status VARCHAR NOT NULL DEFAULT 'draft',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX ix_routes_tenant_id ON routes(tenant_id);
-CREATE INDEX ix_routes_tenant_batch ON routes(tenant_id, batch_id);
-
--- 5. ROUTE_LEGS (Multi-leg route segments + state machine) --------------
+-- 4. ROUTE_LEGS (Multi-leg route segments + state machine) --------------
 -- A single segment of a (possibly multi-leg/chained) route, e.g. an
--- outbound Ketzin->Berlin leg and its round-trip Berlin->Ketzin backhaul
+-- outbound Riyadh->Jeddah leg and its round-trip Jeddah->Riyadh backhaul
 -- leg. Mandatory tenant_id AND session_id: every leg is strictly isolated
 -- to one tenant and one parallel dispatcher stream.
 CREATE TABLE route_legs (
@@ -242,7 +230,6 @@ CREATE TABLE route_legs (
     tenant_id VARCHAR NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
     session_id UUID NOT NULL REFERENCES optimization_sessions(id) ON DELETE CASCADE,
     batch_id UUID REFERENCES bulk_batches(id) ON DELETE SET NULL,
-    route_id UUID REFERENCES routes(id) ON DELETE SET NULL,
 
     origin VARCHAR NOT NULL,
     destination VARCHAR NOT NULL,
@@ -322,12 +309,11 @@ companies (tenant)
   ├─< vehicles (tenant_id)                        -- GLOBAL REGISTRY: one row per unique physical vehicle
   │     └─< batch_vehicles (tenant_id, vehicle_id) -- one row per relocation TASK (leg); vehicle_id NOT unique
   └─< optimization_sessions (tenant_id)           -- parallel dispatcher streams
-        ├─< bulk_batches (tenant_id, session_id)  -- one row per uploaded file/manifest
+        ├─< bulk_batches (tenant_id, session_id)  -- one row per leg
         │     ├─< batch_vehicles (tenant_id, batch_id)  -- this batch's relocation tasks
-        │     ├─< routes (tenant_id, batch_id)
         │     ├─< drivers (tenant_id, batch_id)   -- FCFS claim bookkeeping, zero-PII
-        │     └─< broadcast_waves (batch_id)
-        └─< route_legs (tenant_id, session_id, batch_id?, route_id?)  -- multi-leg segments
+        │     └─< broadcast_waves (batch_id)    -- not used by the dispatch flow yet
+        └─< route_legs (tenant_id, session_id, batch_id?)  -- multi-leg segments
 ```
 
 - `optimization_sessions` is the top-level parallel-stream grouping per tenant.
@@ -340,58 +326,52 @@ companies (tenant)
 - `bulk_batches.session_id` is **nullable** (backward compatibility with
   pre-session batches) but **always set** by current upload flows.
 - `route_legs.session_id` is **mandatory** (`NOT NULL`) — every segment
-  belongs to exactly one session, and `route_legs.batch_id` /
-  `route_legs.route_id` are optional links back to the originating file
-  and computed route respectively (`ON DELETE SET NULL`, so a leg survives
-  batch/route cleanup for audit purposes).
+  belongs to exactly one session, and `route_legs.batch_id` is an optional
+  link back to the originating file (`ON DELETE SET NULL`, so a leg
+  survives batch cleanup for audit purposes). One leg exists per
+  (batch, `sequence_order`).
 
 ## Route Leg State Machine (`route_legs.status`)
 
-Enforced at the database level by the `ck_route_legs_status` CHECK
-constraint — only these five values are ever valid. The outbound leg and
-its matching round-trip backhaul leg are separate `route_legs` rows, each
-with its own status:
+The `ck_route_legs_status` CHECK constraint allows five values; four are
+used:
 
 ```
-Outbound leg:
-
-  pending ──── driver claims ────▶ claimed_driver
-   │   ▲                                │
-   │   └── dispatcher Retry / unassign ─┘
-   │
-   └──── driver rejects ────▶ rejected ── dispatcher Retry ──▶ pending
-
-Matching backhaul leg (destination → origin, same tenant_id + session_id only):
-
-  pending ── outbound leg claimed ──▶ passenger_offered ── backhaul claimed ──▶ claimed_passenger
+           every offered driver declines
+   pending ─────────────────────────────▶ rejected
+     │  ▲                                    │
+     │  └──── dispatcher "Retry" ◀───────────┘
+     │  ▲
+     │  └──── dispatcher "Remove driver" (last driver removed)
+     │
+     ├─ a driver claims a vehicle ─────────▶ claimed_driver
+     └─ a passenger joins (nobody claimed) ─▶ claimed_passenger
 ```
 
-- **`pending`** — default state on leg creation; eligible for FCFS
-  claiming or backhaul offering.
-- **`claimed_driver`** — set when a driver claims the outbound leg via the
-  Telegram webhook (`apps/api/app/api/v1/endpoints/telegram.py`), strictly
-  scoped to `(tenant_id, batch_id)`; triggers an automatic lookup for a
-  matching round-trip backhaul leg within the **same** `(tenant_id,
-  session_id)`.
-- **`rejected`** — set when a driver explicitly declines the leg via the
-  Telegram webhook.
-- **`passenger_offered`** — set automatically on the matching backhaul leg
-  (destination → origin) once the outbound leg is claimed, so it enters
-  the round-trip chaining offer pool for a return passenger/driver.
-- **`claimed_passenger`** — terminal state once the backhaul leg itself is
-  claimed.
-- Dispatcher manual controls (Retry / unassign driver, implemented in
-  `apps/api/app/api/v1/endpoints/batches.py`) reset a `rejected` or
-  `claimed_driver` leg back to `pending`; see `docs/api_protocols.md`
-  §5.3 ("Dispatcher Manual Controls") for the endpoint contracts.
+| Status | Set by |
+|---|---|
+| `pending` | leg creation; "Retry" (`POST /batches/{batch_id}/segments/{leg_id}/retry`, 409 while the leg has drivers); removing the last driver |
+| `claimed_driver` | a vehicle claim on the leg — Telegram or `POST /jobs/claim`; `driver_phone` holds the driver_hash |
+| `claimed_passenger` | a passenger joining a still-pending leg; passengers are listed in `co_driver_hashes` |
+| `rejected` | the last offered driver declining (no vehicle taken) |
+| `passenger_offered` | allowed by the constraint, not set by the current code |
+
+After a claim, the driver is offered the next relay leg, else an open
+return-trip (backhaul) leg (destination → origin) in the **same**
+`(tenant_id, session_id)`, as a normal vehicle offer.
+
+"Remove driver" (`DELETE /batches/{batch_id}/segments/{leg_id}/driver`)
+releases every vehicle the driver holds on the leg (back to `unassigned`),
+notifies them, and keeps the leg `claimed_driver` if other drivers remain.
+
 
 ## Multi-Tenant Isolation Enforcement
 
 1. **Column-level**: `tenant_id` is `NOT NULL` with a `FOREIGN KEY →
    companies(id) ON DELETE CASCADE` on every `TenantScopedMixin` table
-   (listed in [Architecture Overview](#architecture-overview)).
-2. **Query-level (automatic)**: `apps/api/app/db/tenant_filter.py` installs
-   a `do_orm_execute` SQLAlchemy event listener that injects
+   (`optimization_sessions`, `bulk_batches`, `vehicles`, `batch_vehicles`,
+   `route_legs`, `drivers`).
+2. **Query-level (automatic)**: a `do_orm_execute` SQLAlchemy event listener that injects
    `with_loader_criteria(TenantScopedMixin, tenant_id == <current
    tenant>)` into every ORM `select`/`update`/`delete`, including
    relationship-joined loads — a forgotten `.where(tenant_id == ...)`
@@ -403,8 +383,7 @@ Matching backhaul leg (destination → origin, same tenant_id + session_id only)
 4. **Endpoint-level (explicit, redundant)**: dispatcher-control endpoints
    additionally re-verify `(tenant_id, batch_id)` and `(tenant_id,
    batch_id, leg_id)` triples explicitly before returning or mutating any
-   row (`_get_tenant_scoped_batch` / `_get_tenant_scoped_leg` in
-   `apps/api/app/api/v1/endpoints/batches.py`), so tenant isolation does
+   row, so tenant isolation does
    not depend solely on the global ORM hook.
 5. **Webhook context (no bound tenant)**: inbound Telegram webhooks carry
    no JWT/tenant header, so the automatic ORM filter has nothing to bind.
@@ -413,17 +392,14 @@ Matching backhaul leg (destination → origin, same tenant_id + session_id only)
    `tenant_isolation_bypass()`), then apply that `tenant_id` as an
    explicit `WHERE` predicate on every subsequent query — the bypass never
    substitutes for isolation, it only unblocks the lookup that determines
-   which tenant to isolate by. The legacy WhatsApp booking flow
-   (`apps/api/app/services/booking_service.py::claim_vehicle`) follows the
-   same pattern for `batch_vehicles` lookups, since it predates
-   multi-tenancy and has no `tenant_id` of its own to scope by.
+   which tenant to isolate by. The WhatsApp webhook does the same: it loads the offered
+   task under the bypass and claims it with its own `tenant_id` bound.
 6. **Fail-closed default**: any query against a `TenantScopedMixin` table
    executed with no tenant bound to the current context raises
    `MissingTenantContextError` rather than running unfiltered.
-7. **Cron/background jobs (explicit, audited bypass)**:
-   `BookingExpirationService.release_expired_locks` intentionally releases
-   expired `batch_vehicles` locks **across every tenant** in one pass (it
-   is not a per-request operation), so it wraps its query in
-   `tenant_isolation_bypass()` rather than running under one tenant's
-   context — the only sanctioned way to perform a genuinely cross-tenant
-   operation.
+7. **Background jobs:** the OCR pipeline runs
+   outside any request, inside `tenant_isolation_bypass()`, and writes every
+   row with the batch's `tenant_id` passed explicitly. The bypass is the
+   only sanctioned way to run without a bound tenant.
+8. **Database-level:** `fk_batch_vehicles_batch_same_tenant` rejects a
+   vehicle task whose batch belongs to another tenant.
