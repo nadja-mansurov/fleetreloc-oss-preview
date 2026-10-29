@@ -137,6 +137,8 @@ normalized, duplicates dropped):
 **Claiming is atomic:** one conditional `UPDATE … WHERE status = 'unassigned'`
 per vehicle. When two drivers claim the
 same vehicle, exactly one wins; the same driver claiming twice is a no-op.
+No Redis lock is used: the database row is the single source of truth, so
+there is no lock to expire or get out of sync with the data.
 Vehicle task statuses: `unassigned`, `locked`, `assigned`, `in_transit`,
 `delivered`, `cancelled` (database CHECK constraint).
 
