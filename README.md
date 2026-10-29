@@ -2,7 +2,9 @@
 
 Disclaimer: This repository is an independent, personal R&D portfolio project developed strictly on my own time, using my own personal equipment, and without any relation, contribution, or connection to any current or past employers. All concepts, code structures, and architectures presented here are autonomous technical explorations and do not utilize proprietary employer resources or trade secrets.
 
-Public preview of **FleetReloc**: a **messenger-first dispatch platform** for car rental networks, leasing operators and fleet managers in the GCC and Europe. It automates bulk vehicle relocation, moving cars between branches, service centers and airports across multi-leg routes. Drivers work entirely in a chat app: Telegram today, WhatsApp as the second channel.
+Public preview of **FleetReloc**: a **messenger-first dispatch system** for vehicle relocation agencies, car rental networks, leasing operators and fleet managers in Europe and the GCC. It automates bulk vehicle relocation, moving cars between branches, service centers and airports across multi-leg routes. Drivers work entirely in a chat app: Telegram today, WhatsApp as the second channel.
+
+> **Status:** pre-launch R&D. The system is built and tested, but not publicly deployed and not yet used by customers.
 
 > **About this repository:** this is a public preview. It contains documentation, a demo video, a synthetic sample manifest, and configuration templates. The application source code is maintained in a private repository.
 
@@ -28,13 +30,13 @@ Public preview of **FleetReloc**: a **messenger-first dispatch platform** for ca
 - **One batch per leg**, in sequence. A driver is offered leg 2 and later only after claiming or declining the previous leg.
 - **Broadcast waves:** offers go out in waves, round-robin over the vehicles still open.
 - **Interactive role choice:** drivers tap **Drive**, **Passenger / Co-driver** or **Reject** on Telegram inline buttons.
-- **No double assignment:** each vehicle is claimed with a single atomic database operation, so when two drivers tap at once, exactly one gets the car.
+- **No double assignment:** each claim is decided by a single conditional PostgreSQL update, with no lock service, so when two drivers tap at once, exactly one gets the car. Verified with concurrent-claim tests.
 - **Return-leg (backhaul) matching** within a dispatch session.
 - **Safe Telegram retries:** each Telegram update is processed once, so a redelivered message never runs a claim twice.
 - **Pluggable channels:** a `DriverNotifier` interface with Telegram and WhatsApp (Bird) implementations.
 
 ### Security and data protection
-- **Dashboard login:** OpenID Connect via Keycloak (authorization code + PKCE). Every API call needs a login token, and the tenant comes from the verified token.
+- **Dashboard login:** OpenID Connect via Keycloak (authorization code + PKCE). Every dashboard API call needs a login token, and the tenant comes from the verified token.
 - **Zero-PII driver identity:** phone numbers are normalized and turned into irreversible keyed hashes (HMAC-SHA256) at the API boundary. Only the hash and a masked display form are stored. Raw numbers never reach the database, the cache or the logs.
 - **Verified driver registration:** a driver links their chat by sharing their *own* Telegram contact. Nothing is inferred.
 - **Automatic tenant isolation:** every database query is filtered by tenant (SQLAlchemy event listeners plus request-scoped context), and the database itself rejects links between different tenants' data.
@@ -45,7 +47,7 @@ Public preview of **FleetReloc**: a **messenger-first dispatch platform** for ca
   - Error responses never expose internals.
   - Request, upload and spreadsheet size limits, plus a zip-bomb guard.
 - **Demo mode:** a configurable demo number (`DEMO_MAGIC_PHONE`) routes messages to a demo chat, for live presentations without real driver data.
-- Built around data minimisation, in line with GDPR and the Saudi PDPL.
+- Designed for data minimisation (GDPR, Saudi PDPL); retention and deletion controls are on the roadmap.
 
 ### Dispatcher dashboard
 - Next.js 16 / TypeScript, in **English, German and Arabic**, with full right-to-left layout.
@@ -74,19 +76,20 @@ Public preview of **FleetReloc**: a **messenger-first dispatch platform** for ca
   # Or a self-hosted container for isolated environments:
   # OSRM_BASE_URL=http://osrm:5000/route/v1/driving
   ```
-- **Data isolation:** for high-compliance deployments, self-host OSRM so fleet coordinates never leave your infrastructure. Self-hosted geocoding is being finalized.
+- **Data isolation:** for high-compliance deployments, self-host OSRM so fleet coordinates never leave your infrastructure. Self-hosted geocoding is on the roadmap.
 
 ---
 
 ## Roadmap
 
 Planned, not built yet:
+- **Driver messages in German, English and Arabic,** with the language set per driver.
+- **Batch result export** (Excel/CSV): who drove which car, on which leg, when.
+- **WhatsApp at parity with Telegram:** the same claim, passenger and relay flow, starting with a manual relay mode that needs no WhatsApp API.
 - **Production deployment and observability:** reverse proxy with TLS, error tracking, tracing and metrics.
-- **WhatsApp at parity with Telegram:** the same claim, passenger and relay flow, including batch broadcasts over WhatsApp, for Saudi Arabia and the UAE.
 - **Extraction quality benchmark:** labelled EN/DE/AR test documents with per-field accuracy and review-rate tracking.
-- **Fully on-premise geo data:** self-hosted geocoding alongside self-hosted routing, so no address or coordinate leaves the deployment.
 - **Retention and deletion controls** for driver data.
-- **Later:** live driver location from Telegram, a route optimization solver (driver-to-leg assignment under time windows), bring-your-own LLM endpoint (any approved OpenAI-compatible model), and high availability.
+- **Later:** fully on-premise geo data (self-hosted geocoding), live driver location from Telegram, a route optimization solver (driver-to-leg assignment under time windows), bring-your-own LLM endpoint (any approved OpenAI-compatible model), and high availability.
 
 ---
 
@@ -96,7 +99,7 @@ Planned, not built yet:
 
 https://github.com/user-attachments/assets/f9bc4038-2838-4138-82be-354e70f04485
 
-*(Everything shown in the video, including transfer orders, company details, hubs, vehicles, plates, VINs and phone numbers, is synthetic test data; see the synthetic data notice above.)*
+*(Everything shown in the video is synthetic test data; see the synthetic data notice above.)*
 
 ---
 
@@ -113,7 +116,7 @@ A synthetic bilingual (English/Arabic) transport manifest (`local_order_ksa.png`
 
 ![Synthetic bilingual transport manifest](docs/samples/local_order_ksa.png)
 
-*(All company names, Commercial Registration (CR) numbers and addresses in this sample are synthetic and were generated solely for R&D demonstration.)*
+*(Synthetic; see the synthetic data notice above.)*
 
 ---
 
