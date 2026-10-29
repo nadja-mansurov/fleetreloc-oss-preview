@@ -97,7 +97,7 @@ Planned, not built yet:
 
 > The dispatcher dashboard in action: instant language switching (English / RTL Arabic), manifest upload, wave-based driver broadcasts via Telegram, and live status tracking:
 
-https://github.com/user-attachments/assets/f9bc4038-2838-4138-82be-354e70f04485
+https://github.com/user-attachments/assets/c6536f38-2190-4f65-b787-d98a1788b503
 
 *(Everything shown in the video is synthetic test data; see the synthetic data notice above.)*
 
