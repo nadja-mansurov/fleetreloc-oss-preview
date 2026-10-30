@@ -100,7 +100,7 @@ Planned, not built yet:
 
 [![FleetReloc demo – Local OCR dispatching for vehicle relocation](https://www.loom.com/v1/videos/81788d87f4f84b9fa9157a6e998a89aa/thumbnail.gif)](https://www.loom.com/share/81788d87f4f84b9fa9157a6e998a89aa)
 
-*Personal R&D / portfolio project. Synthetic data. Not a commercial product. (~2.5 min)*
+*Personal R&D / portfolio project. Synthetic data. Not a commercial product. (~9 min)*
 
 ---
 
