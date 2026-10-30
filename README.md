@@ -96,10 +96,11 @@ Planned, not built yet:
 ## Demo preview
 
 > The dispatcher dashboard in action: instant language switching (English / RTL Arabic), manifest upload, wave-based driver broadcasts via Telegram, and live status tracking:
+## Demo
 
-https://github.com/user-attachments/assets/c6536f38-2190-4f65-b787-d98a1788b503
+[![FleetReloc demo – Local OCR dispatching for vehicle relocation](https://www.loom.com/v1/videos/81788d87f4f84b9fa9157a6e998a89aa/thumbnail.gif)](https://www.loom.com/share/81788d87f4f84b9fa9157a6e998a89aa)
 
-*(Everything shown in the video is synthetic test data; see the synthetic data notice above.)*
+*Personal R&D / portfolio project. Synthetic data. Not a commercial product. (~2.5 min)*
 
 ---
 
