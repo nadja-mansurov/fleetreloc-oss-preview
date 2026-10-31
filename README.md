@@ -1,132 +1,115 @@
 # FleetReloc OSS Preview
 
-Disclaimer: This repository is an independent, personal R&D portfolio project developed strictly on my own time, using my own personal equipment, and without any relation, contribution, or connection to any current or past employers. All concepts, code structures, and architectures presented here are autonomous technical explorations and do not utilize proprietary employer resources or trade secrets.
+**FleetReloc** is dispatch software for bulk vehicle relocation: moving cars between rental branches, airports, service centres and dealers. Drivers work through a messenger; there is no driver app.
 
-Public preview of **FleetReloc**: a **messenger-first dispatch system** for vehicle relocation agencies, car rental networks, leasing operators and fleet managers in Europe and the GCC. It automates bulk vehicle relocation, moving cars between branches, service centers and airports across multi-leg routes. Drivers work entirely in a chat app: Telegram today, WhatsApp as the second channel.
+> **Status:** pre-launch R&D. Built and tested, not publicly deployed.
 
-> **Status:** pre-launch R&D. The system is built and tested, but not publicly deployed and not yet used by customers.
+> **About this repository:** a public preview with documentation, a demo video, a synthetic sample manifest and configuration templates. The application source code is in a private repository.
 
-> **About this repository:** this is a public preview. It contains documentation, a demo video, a synthetic sample manifest, and configuration templates. The application source code is maintained in a private repository.
-
-> **Synthetic data notice:** all data in this repository is synthetic and was generated solely for R&D demonstration. That covers the documentation, sample files, screenshots and the demo video: company names, addresses, commercial registration numbers (CR / HRB), manifests, vehicles, VINs, license plates, phone numbers, driver hashes, and batch, task and other IDs. It does not represent any real company's operations, customers, sites, vehicles or drivers. Real public street and place names appear only as geocodable test locations and imply no business relationship.
+> **Synthetic data notice:** all data in this repository is synthetic and was generated for R&D demonstration only. That includes the documentation, sample files, screenshots and the demo video: company names, addresses, registration numbers, manifests, vehicles, VINs, plates, phone numbers, hashes and IDs. Real street and place names appear only as geocodable test locations.
 
 ---
 
-## What FleetReloc does today
+## What it does
 
-### From manifest to dispatched jobs
-- **Multi-format intake.** Dispatchers upload transport manifests as PDF, scanned image, Excel, CSV or JSON. Several files can be uploaded at once, each assigned to its leg.
-- **Asynchronous processing.** Scanned documents are processed in the background (`202 Accepted`), so large manifests never hit request timeouts.
-- **Human in the loop.** Low-confidence extractions are marked for review. The dispatcher corrects them in the dashboard before any offer reaches a driver, and edits flow through to the dispatched jobs (re-geocoded and re-routed).
+1. **Order intake.** The dispatcher uploads orders as PDF, scans, phone photos, Excel, CSV or JSON.
+2. **Extraction.** PDFs with a text layer are read directly. Images go through OCR on the server. A local LLM then turns the text into vehicles, plates, VINs and stops.
+3. **Review.** Low-confidence results go to the dispatcher for review before any offer goes out.
+4. **Offers.** Offers go out to drivers in waves on Telegram, with **Claim / Passenger / Reject** buttons. WhatsApp (via Bird) sends single offers; bulk broadcasts are Telegram-only.
+5. **Claim.** The first driver to claim gets the car. Two drivers can never get the same car.
+6. **Routes.** Multi-leg routes (relay legs), passenger mode and return-trip matching.
 
-### Privacy-first, on-premise parsing
-- **OpenCV preprocessing:** grayscale, `fastNlMeansDenoising`, Otsu binarization.
-- **Multi-language Tesseract:** `eng+deu+ara`, with fallback.
-- **Self-hosted LLM (Ollama, Llama 3):** turns OCR text into structured vehicle and address data. Invalid output is sent back to the model with its validation errors to correct itself.
-- **Deterministic safeguards:** validation rules and tiered address fallbacks stop malformed extractions from reaching routing and dispatch.
-- Document parsing runs entirely within your own infrastructure; no document leaves the server for parsing.
-
-### Multi-leg relay dispatch
-- **One batch per leg**, in sequence. A driver is offered leg 2 and later only after claiming or declining the previous leg.
-- **Broadcast waves:** offers go out in waves, round-robin over the vehicles still open.
-- **Interactive role choice:** drivers tap **Drive**, **Passenger / Co-driver** or **Reject** on Telegram inline buttons.
-- **No double assignment:** each claim is decided by a single conditional PostgreSQL update, with no lock service, so when two drivers tap at once, exactly one gets the car. Verified with concurrent-claim tests.
-- **Return-leg (backhaul) matching** within a dispatch session.
-- **Safe Telegram retries:** each Telegram update is processed once, so a redelivered message never runs a claim twice.
-- **Pluggable channels:** a `DriverNotifier` interface with Telegram and WhatsApp (Bird) implementations.
-
-### Security and data protection
-- **Dashboard login:** OpenID Connect via Keycloak (authorization code + PKCE). Every dashboard API call needs a login token, and the tenant comes from the verified token.
-- **Zero-PII driver identity:** phone numbers are normalized and turned into irreversible keyed hashes (HMAC-SHA256) at the API boundary. Only the hash and a masked display form are stored. Raw numbers never reach the database, the cache or the logs.
-- **Verified driver registration:** a driver links their chat by sharing their *own* Telegram contact. Nothing is inferred.
-- **Automatic tenant isolation:** every database query is filtered by tenant (SQLAlchemy event listeners plus request-scoped context), and the database itself rejects links between different tenants' data.
-- **Fail-closed webhooks:** Telegram and WhatsApp webhooks reject any call without the shared secret.
-- **Hardened by default:**
-  - Production refuses to start with placeholder or weak secrets, or without a login method.
-  - Phone numbers are kept out of URLs; phone numbers and secrets are redacted from access logs.
-  - Error responses never expose internals.
-  - Request, upload and spreadsheet size limits, plus a zip-bomb guard.
-- **Demo mode:** a configurable demo number (`DEMO_MAGIC_PHONE`) routes messages to a demo chat, for live presentations without real driver data.
-- Designed for data minimisation (GDPR, Saudi PDPL); retention and deletion controls are on the roadmap.
-
-### Dispatcher dashboard
-- Next.js 16 / TypeScript, in **English, German and Arabic**, with full right-to-left layout.
-- Manifest upload, review and editing, per-leg broadcasts, auto-refreshing driver and vehicle status, and route maps.
+The dispatcher dashboard is in English, German and Arabic (right-to-left).
 
 ---
 
-## How it works
+## Key design choices
 
-1. **Upload:** the dispatcher uploads one or more manifests and assigns legs.
-2. **Extract:** structured files are imported directly; scans go through OpenCV, OCR and the local LLM, then geocoding and real-road routing.
-3. **Review:** uncertain extractions wait for the dispatcher's approval.
-4. **Broadcast:** leg 1 offers go out to drivers in waves over Telegram; single offers can also go through WhatsApp.
-5. **Claim:** the first driver to tap gets the vehicle, atomically. Others can join as passengers or pick another vehicle.
-6. **Relay:** a driver who finished or declined a leg becomes eligible for the next one, and so on along the chain.
+### On-server OCR, chosen by benchmark
+- **Engine:** RapidOCR with PaddleOCR PP-OCRv5 models. The Latin or Arabic model is chosen by the upload's region. It runs on CPU only and needs no network, because the models are part of the Docker image. Tesseract is the fallback.
+- **Benchmark (on synthetic test pages):**
 
----
+  | | Tesseract | RapidOCR |
+  |---|---|---|
+  | VINs found, low-resolution scan | 6/10 | 10/10 |
+  | Plates found, low-resolution scan | 0/10 | 10/10 |
+  | Arabic words read | 74–81% | 96–100% |
 
-## 🗺️ Routing & geolocation
-- **Routing:** OSRM for real-road geometry, distances and durations. Mapbox is supported as an alternative, with a straight-line fallback if neither responds.
-- **Configuration (.env):**
-  ```env
-  ROUTING_PROVIDER=osrm
-  # Public endpoint for quick evaluation:
-  OSRM_BASE_URL=https://router.project-osrm.org/route/v1/driving
-  # Or a self-hosted container for isolated environments:
-  # OSRM_BASE_URL=http://osrm:5000/route/v1/driving
-  ```
-- **Data isolation:** for high-compliance deployments, self-host OSRM so fleet coordinates never leave your infrastructure. Self-hosted geocoding is on the roadmap.
+- **Rejected options:**
+  - Tuned Tesseract.
+  - A per-line Latin/Arabic hybrid.
+  - EasyOCR.
+  - Apple Vision: macOS only.
+  - A vision LLM (Qwen2.5-VL): needs a GPU and changed VIN characters.
+  - Cloud OCR: documents would leave the customer's servers.
 
----
+### Local LLM with validation
+- A local LLM (Ollama, Llama 3) extracts the structured data. It corrects its own invalid output (up to 3 attempts).
+- Validation repairs VINs: I/O/Q read as 1/0/0, and split VINs are joined. It fills a missing VIN or plate only from the same car's row.
 
-## Roadmap
+### Atomic claims in the database
+- Claiming a vehicle is one conditional database update (`UPDATE … WHERE status='unassigned' RETURNING`), so two drivers can never get the same car.
+- This replaced an earlier single-server Redis lock with a 15-minute expiry.
 
-Planned, not built yet:
-- **Driver messages in German, English and Arabic,** with the language set per driver.
-- **Batch result export** (Excel/CSV): who drove which car, on which leg, when.
-- **WhatsApp at parity with Telegram:** the same claim, passenger and relay flow, starting with a manual relay mode that needs no WhatsApp API.
-- **Production deployment and observability:** reverse proxy with TLS, error tracking, tracing and metrics.
-- **Extraction quality benchmark:** labelled EN/DE/AR test documents with per-field accuracy and review-rate tracking.
-- **Retention and deletion controls** for driver data.
-- **Later:** fully on-premise geo data (self-hosted geocoding), live driver location from Telegram, a route optimization solver (driver-to-leg assignment under time windows), bring-your-own LLM endpoint (any approved OpenAI-compatible model), and high availability.
+### Privacy and tenant isolation
+- **Driver phone numbers:**
+  - Turned into a keyed hash (HMAC-SHA256) at the API boundary.
+  - Only the hash and a masked form (e.g. `+49•••••0001`) are stored, in PostgreSQL and Redis.
+  - Never put in URLs; logs redact them.
+- **Login:** OIDC through Keycloak (authorization code + PKCE). The API verifies each token and takes the tenant from it.
+- **Tenant isolation:** every query is filtered by tenant automatically, and the database rejects cross-tenant links.
 
----
+### Hardening
+- Production refuses weak secrets.
+- Webhooks fail closed without their secret.
+- Request, upload and spreadsheet size limits.
+- Errors never expose internals.
+- Outbound messages are metered.
 
-## Demo preview
-
-> The dispatcher dashboard in action: instant language switching (English / RTL Arabic), manifest upload, wave-based driver broadcasts via Telegram, and live status tracking:
-## Demo
-
-[![FleetReloc demo – Local OCR dispatching for vehicle relocation](https://www.loom.com/v1/videos/81788d87f4f84b9fa9157a6e998a89aa/thumbnail.gif)](https://www.loom.com/share/81788d87f4f84b9fa9157a6e998a89aa)
-
-*Personal R&D / portfolio project. Synthetic data. Not a commercial product. (~9 min)*
-
----
-
-## Documentation
-
-- [api_protocols.md](docs/api_protocols.md): authentication, endpoints, webhooks, the parsing pipeline and error conventions, as built.
-- [db_schema.md](docs/db_schema.md): PostgreSQL schema, the route-leg state machine, session-based parallel dispatch, and multi-tenant isolation rules.
-
----
-
-## Sample ingestion document
-
-A synthetic bilingual (English/Arabic) transport manifest (`local_order_ksa.png`), of the kind the OCR and LLM pipeline turns into vehicles (Hyundai, Toyota) and Riyadh-based addresses:
-
-![Synthetic bilingual transport manifest](docs/samples/local_order_ksa.png)
-
-*(Synthetic; see the synthetic data notice above.)*
+### On-premise option
+- `ON_PREMISE_GEO=true` switches to self-hosted routing (OSRM) and geocoding (Nominatim).
+- With it set, the app refuses to start if it is configured for public geo services.
 
 ---
 
 ## Tech stack
 
-- **Backend:** Python 3.12, FastAPI, async SQLAlchemy 2.0, Alembic, Pydantic v2, PostgreSQL (JSONB), Redis.
-- **Auth:** Keycloak (OpenID Connect, PKCE).
-- **AI / parsing (on-premise):** OpenCV, Tesseract (`eng+deu+ara`), Ollama (Llama 3).
-- **Messaging:** Telegram Bot API, WhatsApp via Bird.
-- **Routing:** OSRM (self-hosted or public), Mapbox (optional), Nominatim geocoding.
-- **Frontend:** Next.js 16, React, TypeScript, Tailwind CSS, next-intl (EN/DE/AR, RTL).
-- **Infrastructure:** Docker, Docker Compose.
+- **Backend:** FastAPI (Python), async SQLAlchemy, PostgreSQL, Redis, Alembic.
+- **Dashboard:** Next.js 16 (TypeScript); English, German, Arabic (RTL).
+- **OCR / extraction:** RapidOCR (PaddleOCR PP-OCRv5), Tesseract fallback, Ollama (Llama 3).
+- **Messaging:** Telegram Bot API; WhatsApp via Bird.
+- **Login:** Keycloak (OIDC, PKCE).
+- **Geo:** OSRM, Nominatim.
+- **Runtime:** Docker, Docker Compose.
+
+---
+
+## Planned
+
+Not built yet:
+- WhatsApp at parity with Telegram.
+- Deleting a driver's data on request.
+- Public deployment and monitoring.
+
+---
+
+## Demo
+
+[![FleetReloc demo](https://www.loom.com/v1/videos/81788d87f4f84b9fa9157a6e998a89aa/thumbnail.gif)](https://www.loom.com/share/81788d87f4f84b9fa9157a6e998a89aa)
+
+*R&D project, synthetic data. (~9 min)*
+
+---
+
+## Sample order
+
+A synthetic bilingual (English/Arabic) transport order of the kind the intake pipeline reads:
+
+![Synthetic bilingual transport order](docs/samples/local_order_ksa.png)
+
+---
+
+## Documentation
+
+- [api_protocols.md](docs/api_protocols.md): authentication, endpoints, webhooks and error conventions.
+- [db_schema.md](docs/db_schema.md): PostgreSQL schema, route-leg states and tenant isolation.
