@@ -1,4 +1,4 @@
-# FleetReloc OSS Preview
+# FleetReloc — public preview
 
 **FleetReloc** is dispatch software for bulk vehicle relocation: moving cars between rental branches, airports, service centres and dealers. Drivers work through a messenger; there is no driver app.
 
@@ -14,8 +14,8 @@
 
 1. **Order intake.** The dispatcher uploads orders as PDF, scans, phone photos, Excel, CSV or JSON.
 2. **Extraction.** PDFs with a text layer are read directly. Images go through OCR on the server. A local LLM then turns the text into vehicles, plates, VINs and stops.
-3. **Review.** Low-confidence results go to the dispatcher for review before any offer goes out.
-4. **Offers.** Offers go out to drivers in waves on Telegram, with **Claim / Passenger / Reject** buttons. WhatsApp (via Bird) sends single offers; bulk broadcasts are Telegram-only.
+3. **Review.** A batch goes to the dispatcher for review when the LLM is unsure *or* a check fails: every VIN and plate must appear in the document's own text, nothing may be missing, and instruction-like text in the document ("ignore previous instructions") blocks it. The dispatcher sees why.
+4. **Offers.** Offers go out to drivers in waves on Telegram, with **Claim / Passenger / Reject** buttons. A WhatsApp integration (via Bird) exists as an unverified demo.
 5. **Claim.** The first driver to claim gets the car. Two drivers can never get the same car.
 6. **Routes.** Multi-leg routes (relay legs), passenger mode and return-trip matching.
 
@@ -35,6 +35,8 @@ The dispatcher dashboard is in English, German and Arabic (right-to-left).
   | Plates found, low-resolution scan | 0/10 | 10/10 |
   | Arabic words read | 74–81% | 96–100% |
 
+  *One synthetic page per condition, with 10 VINs and 10 plates; Arabic measured on two synthetic pages of 111 words each.*
+
 - **Rejected options:**
   - Tuned Tesseract.
   - A per-line Latin/Arabic hybrid.
@@ -43,9 +45,12 @@ The dispatcher dashboard is in English, German and Arabic (right-to-left).
   - A vision LLM (Qwen2.5-VL): needs a GPU and changed VIN characters.
   - Cloud OCR: documents would leave the customer's servers.
 
-### Local LLM with validation
-- A local LLM (Ollama, Llama 3) extracts the structured data. It corrects its own invalid output (up to 3 attempts).
-- Validation repairs VINs: I/O/Q read as 1/0/0, and split VINs are joined. It fills a missing VIN or plate only from the same car's row.
+### Local LLM, checked rather than trusted
+- A local LLM (Ollama, Llama 3) extracts the structured data. It corrects its own invalid output (up to 3 attempts). Temperature 0 and a fixed seed make the output repeatable.
+- Validation repairs VINs: I/O/Q read as 1/0/0, and split VINs are joined. A missing VIN or plate is filled only from the same car's row.
+- **Review by checks, not by the model's confidence.** The confidence score is self-reported, and an uploaded document is untrusted input. So deterministic checks also decide review (see step 3), and each reason is stored for the dispatcher.
+- **Prompt injection:** the document is passed to the model marked as data, with an instruction never to follow text inside it. That lowers the risk; the checks above are what stop such a batch from reaching drivers unreviewed.
+- **Measured:** an offline eval harness runs the full pipeline on 36 synthetic documents (126 cars; English, German and Arabic orders; digital PDFs, scans and photos) and scores each field.
 
 ### Atomic claims in the database
 - Claiming a vehicle is one conditional database update (`UPDATE … WHERE status='unassigned' RETURNING`), so two drivers can never get the same car.
@@ -77,7 +82,7 @@ The dispatcher dashboard is in English, German and Arabic (right-to-left).
 - **Backend:** FastAPI (Python), async SQLAlchemy, PostgreSQL, Redis, Alembic.
 - **Dashboard:** Next.js 16 (TypeScript); English, German, Arabic (RTL).
 - **OCR / extraction:** RapidOCR (PaddleOCR PP-OCRv5), Tesseract fallback, Ollama (Llama 3).
-- **Messaging:** Telegram Bot API; WhatsApp via Bird.
+- **Messaging:** Telegram Bot API; WhatsApp via Bird (demo).
 - **Login:** Keycloak (OIDC, PKCE).
 - **Geo:** OSRM, Nominatim.
 - **Runtime:** Docker, Docker Compose.
@@ -87,8 +92,8 @@ The dispatcher dashboard is in English, German and Arabic (right-to-left).
 ## Planned
 
 Not built yet:
-- WhatsApp at parity with Telegram.
-- Deleting a driver's data on request.
+- WhatsApp offers sent through the dispatcher's own WhatsApp account, with no WhatsApp API and no phone numbers on the server (designed, deferred).
+- Retention limits for driver data, and deleting a driver's data on request.
 - Public deployment and monitoring.
 
 ---

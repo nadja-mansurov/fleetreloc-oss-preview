@@ -2,6 +2,10 @@
 
 > **Synthetic data:** all example values in this document (companies, addresses, vehicles, VINs, plates, phone numbers, hashes and IDs) are synthetic, generated for R&D demonstration only. See the synthetic data notice in the [README](../README.md).
 
+The PostgreSQL schema as defined by the application's SQLAlchemy models and
+Alembic migrations; a test runs `alembic check`, so the two can't silently
+differ. Last checked against the code: 2026-11-11.
+
 Keycloak (dashboard login) keeps its own data in a separate database with
 its own user in production; it shares no tables or credentials with this
 schema.
@@ -10,7 +14,7 @@ schema.
 
 - **Multi-tenancy**: every tenant-owned table (`optimization_sessions`,
   `bulk_batches`, `vehicles`, `batch_vehicles`, `route_legs`,
-  `drivers`) carries a mandatory `tenant_id` column, `NOT NULL`, `FOREIGN
+  `drivers`, `tenant_drivers`) carries a mandatory `tenant_id` column, `NOT NULL`, `FOREIGN
   KEY → companies.id ON DELETE CASCADE`, and declares `TenantScopedMixin`.
   An automatic SQLAlchemy event listener injects `tenant_id ==
   <current tenant>` into **every** ORM `select`/`update`/`delete` against
@@ -60,10 +64,13 @@ schema.
   See [Route Leg State Machine](#route-leg-state-machine-route_legsstatus).
 - **Zero-PII**: no table in this schema ever stores a raw phone number.
   `batch_vehicles.driver_hash`, `drivers.driver_hash`, and
-  `route_legs.driver_phone` store only a keyed HMAC-SHA256 hash. Redis
-  holds hashes too (chat ↔ driver_hash links, pending offers): raw phone
-  numbers are stored nowhere. A migration scrubbed raw phones from older
-  payloads.
+  `route_legs.driver_phone` store an opaque driver key: either the key of a
+  driver from the dispatcher's list (`drv_…`, table `tenant_drivers`,
+  nothing derived from a phone), or, for Telegram drivers, a keyed
+  HMAC-SHA256 hash of the phone. The claim logic treats both the same.
+  Redis holds hashes too (chat ↔ driver_hash links, pending offers): raw
+  phone numbers are stored nowhere. A migration scrubbed raw phones from
+  older payloads.
 
 ## PostgreSQL Schema (Live DDL, reconstructed from `information_schema`)
 
@@ -95,11 +102,11 @@ CREATE TABLE optimization_sessions (
 CREATE INDEX ix_optimization_sessions_tenant_id ON optimization_sessions(tenant_id);
 CREATE INDEX ix_optimization_sessions_tenant_status ON optimization_sessions(tenant_id, status);
 
--- 2. BULK_BATCHES (Manifest Imports — one row per uploaded file) --------
--- Multi-file manifest uploads: many bulk_batches rows (one per file) can
--- belong to the SAME optimization_sessions row via session_id, letting a
--- dispatcher upload several files concurrently into one grouped session
--- while each file's parse/import outcome stays independently tracked.
+-- 2. BULK_BATCHES (Manifest Imports — one row per leg) -------------------
+-- Multi-file manifest uploads: files tagged with the same leg number are
+-- merged into that leg's batch, and the legs of one order belong to the
+-- SAME optimization_sessions row via session_id; each leg's parse/import
+-- outcome is tracked separately.
 CREATE TABLE bulk_batches (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id VARCHAR NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
@@ -114,12 +121,17 @@ CREATE TABLE bulk_batches (
     sequence_order INTEGER NOT NULL DEFAULT 1,
     dispatcher_id UUID,
     file_name TEXT NOT NULL,
-    total_vehicles INTEGER NOT NULL,
+    total_vehicles INTEGER NOT NULL DEFAULT 1,
     successful_rows INTEGER NOT NULL DEFAULT 0,
     failed_rows INTEGER NOT NULL DEFAULT 0,
     claimed_count INTEGER NOT NULL DEFAULT 0,
-    status VARCHAR NOT NULL DEFAULT 'processing',    -- processing | ready | manual_review | failed | broadcasting | completed
-    payload JSONB,                                   -- parsed vehicles/waypoints/locations/drivers (OCR/manifest output)
+    status VARCHAR NOT NULL DEFAULT 'ready',         -- processing | ready | manual_review | failed | broadcasting | completed
+    -- The dashboard's view of the batch: parsed vehicles (with their claim
+    -- status mirrored from batch_vehicles), waypoints, offered drivers
+    -- (driver key + masked phone or name, offer status) and, for a batch in
+    -- manual_review, review_reasons (code, vehicle, leg, value). The
+    -- batch_vehicles rows stay the source of truth for who has which car.
+    payload JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 
@@ -195,7 +207,7 @@ CREATE TABLE batch_vehicles (
     status VARCHAR NOT NULL DEFAULT 'unassigned'
         CONSTRAINT vehicles_status_check
         CHECK (status IN ('unassigned', 'locked', 'assigned', 'in_transit', 'delivered', 'cancelled')),
-    driver_hash VARCHAR,     -- HMAC-SHA256 hashed phone/session token (Zero PII retention)
+    driver_hash VARCHAR,     -- opaque driver key: dispatcher-list key or HMAC-SHA256 of the phone (Zero PII)
 
     locked_until TIMESTAMPTZ,   -- unused by the current claim flow (atomic UPDATE, no locks)
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -244,7 +256,8 @@ CREATE TABLE route_legs (
         CONSTRAINT ck_route_legs_status
         CHECK (status IN ('pending', 'claimed_driver', 'rejected', 'passenger_offered', 'claimed_passenger')),
 
-    -- Zero-PII: driver_hash only, never a raw phone number.
+    -- Zero-PII: despite the name, an opaque driver key (as
+    -- batch_vehicles.driver_hash), never a raw phone number.
     driver_phone VARCHAR,
 
     -- Co-driver / Passenger mode (Multi-Leg Relay): driver_hash values of
@@ -253,7 +266,7 @@ CREATE TABLE route_legs (
     -- pool was exhausted. Zero-PII: driver_hash only.
     co_driver_hashes VARCHAR[] NOT NULL DEFAULT '{}',
 
-    -- Real-road routing metadata (same convention as vehicles above).
+    -- Real-road routing metadata (same convention as batch_vehicles above).
     distance_km DOUBLE PRECISION,
     duration_minutes DOUBLE PRECISION,
     route_geometry JSONB,
@@ -268,13 +281,13 @@ CREATE INDEX ix_route_legs_tenant_session ON route_legs(tenant_id, session_id);
 CREATE INDEX ix_route_legs_tenant_session_status ON route_legs(tenant_id, session_id, status);
 CREATE INDEX ix_route_legs_tenant_session_sequence ON route_legs(tenant_id, session_id, sequence_order);
 
--- 6. DRIVERS (FCFS claim state per batch, Zero-PII) ----------------------
+-- 5. DRIVERS (FCFS claim state per batch, Zero-PII) ----------------------
 CREATE TABLE drivers (
     id UUID PRIMARY KEY,
     tenant_id VARCHAR NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
     batch_id UUID NOT NULL REFERENCES bulk_batches(id) ON DELETE CASCADE,
-    driver_hash VARCHAR NOT NULL,   -- HMAC-SHA256, never a raw phone number
-    status VARCHAR NOT NULL DEFAULT 'pending',  -- pending | claimed | expired | cancelled
+    driver_hash VARCHAR NOT NULL,   -- opaque driver key, never a raw phone number
+    status VARCHAR NOT NULL DEFAULT 'pending',  -- pending | claimed | passenger | expired | cancelled
     claimed_at TIMESTAMPTZ,
     expired_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -286,6 +299,25 @@ CREATE TABLE drivers (
 CREATE INDEX ix_drivers_tenant_id ON drivers(tenant_id);
 CREATE INDEX ix_drivers_tenant_batch ON drivers(tenant_id, batch_id);
 CREATE INDEX ix_drivers_tenant_batch_status ON drivers(tenant_id, batch_id, status);
+
+-- 6. TENANT_DRIVERS (the dispatcher's driver list) -----------------------
+-- No phone number and nothing derived from one: an internal ID, a name or
+-- alias the dispatcher recognises, and the language offer texts are written
+-- in. A driver's key in claims, route legs and Redis is derived from the id
+-- ('drv_' + the id without dashes).
+CREATE TABLE tenant_drivers (
+    id UUID PRIMARY KEY,
+    tenant_id VARCHAR NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    display_name VARCHAR(80) NOT NULL,   -- name or alias; phone-like values rejected by the API
+    language VARCHAR(2) NOT NULL,        -- de | ar | en: language of offer texts
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT uq_tenant_drivers_tenant_name UNIQUE (tenant_id, display_name),
+    CONSTRAINT ck_tenant_drivers_language CHECK (language IN ('de', 'ar', 'en'))
+);
+
+CREATE INDEX ix_tenant_drivers_tenant_id ON tenant_drivers(tenant_id);
 
 -- 7. BROADCAST_WAVES (Iterative driver broadcast tracking) --------------
 -- NOT tenant-scoped at the column level; isolation is transitive via
@@ -306,6 +338,7 @@ CREATE TABLE broadcast_waves (
 
 ```
 companies (tenant)
+  ├─< tenant_drivers (tenant_id)                  -- the dispatcher's driver list, no phone numbers
   ├─< vehicles (tenant_id)                        -- GLOBAL REGISTRY: one row per unique physical vehicle
   │     └─< batch_vehicles (tenant_id, vehicle_id) -- one row per relocation TASK (leg); vehicle_id NOT unique
   └─< optimization_sessions (tenant_id)           -- parallel dispatcher streams
@@ -351,7 +384,7 @@ used:
 | Status | Set by |
 |---|---|
 | `pending` | leg creation; "Retry" (`POST /batches/{batch_id}/segments/{leg_id}/retry`, 409 while the leg has drivers); removing the last driver |
-| `claimed_driver` | a vehicle claim on the leg — Telegram or `POST /jobs/claim`; `driver_phone` holds the driver_hash |
+| `claimed_driver` | a vehicle claim on the leg — Telegram or `POST /jobs/claim`; `driver_phone` holds the driver key |
 | `claimed_passenger` | a passenger joining a still-pending leg; passengers are listed in `co_driver_hashes` |
 | `rejected` | the last offered driver declining (no vehicle taken) |
 | `passenger_offered` | allowed by the constraint, not set by the current code |
@@ -370,7 +403,7 @@ notifies them, and keeps the leg `claimed_driver` if other drivers remain.
 1. **Column-level**: `tenant_id` is `NOT NULL` with a `FOREIGN KEY →
    companies(id) ON DELETE CASCADE` on every `TenantScopedMixin` table
    (`optimization_sessions`, `bulk_batches`, `vehicles`, `batch_vehicles`,
-   `route_legs`, `drivers`).
+   `route_legs`, `drivers`, `tenant_drivers`).
 2. **Query-level (automatic)**: a `do_orm_execute` SQLAlchemy event listener that injects
    `with_loader_criteria(TenantScopedMixin, tenant_id == <current
    tenant>)` into every ORM `select`/`update`/`delete`, including
