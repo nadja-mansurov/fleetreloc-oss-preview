@@ -1,6 +1,8 @@
 # Local development stack for FleetReloc.
-# Provisions PostgreSQL (Supabase-compatible schema, see docs/db_schema.md)
-# and Redis (Redlock + BullMQ-compatible queue, see docs/api_protocols.md).
+# Provisions PostgreSQL (schema: docs/db_schema.md; also holds the job
+# queue and the message outbox) and Redis (pending offers, caches; see
+# docs/api_protocols.md). This is a reduced preview of the stack: the full
+# one also runs Keycloak, the manifest worker and the outbox relay.
 # The api/web services build from apps/api and apps/web, which are not part
 # of this public preview, so they sit behind the "app" profile:
 #   docker compose up                  -> postgres + redis only
@@ -16,7 +18,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fleetreloc}
       POSTGRES_DB: ${POSTGRES_DB:-fleetreloc}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -31,7 +33,7 @@ services:
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:

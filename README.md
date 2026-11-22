@@ -15,7 +15,7 @@
 1. **Order intake.** The dispatcher uploads orders as PDF, scans, phone photos, Excel, CSV or JSON.
 2. **Extraction.** PDFs with a text layer are read directly. Images go through OCR on the server. A local LLM then turns the text into vehicles, plates, VINs and stops.
 3. **Review.** A batch goes to the dispatcher for review when the LLM is unsure *or* a check fails: every VIN and plate must appear in the document's own text, nothing may be missing, and instruction-like text in the document ("ignore previous instructions") blocks it. The dispatcher sees why.
-4. **Offers.** Offers go out to drivers in waves on Telegram, with **Claim / Passenger / Reject** buttons. A WhatsApp integration (via Bird) exists as an unverified demo.
+4. **Offers.** Offers go out to drivers in waves on Telegram, with **Claim / Passenger / Reject** buttons. Messages go through a transactional outbox and are retried on transient failures.
 5. **Claim.** The first driver to claim gets the car. Two drivers can never get the same car.
 6. **Routes.** Multi-leg routes (relay legs), passenger mode and return-trip matching.
 
@@ -79,10 +79,10 @@ The dispatcher dashboard is in English, German and Arabic (right-to-left).
 
 ## Tech stack
 
-- **Backend:** FastAPI (Python), async SQLAlchemy, PostgreSQL, Redis, Alembic.
+- **Backend:** FastAPI (Python), async SQLAlchemy, PostgreSQL, Redis, Alembic; a procrastinate job queue in PostgreSQL for scanned manifests.
 - **Dashboard:** Next.js 16 (TypeScript); English, German, Arabic (RTL).
 - **OCR / extraction:** RapidOCR (PaddleOCR PP-OCRv5), Tesseract fallback, Ollama (Llama 3).
-- **Messaging:** Telegram Bot API; WhatsApp via Bird (demo).
+- **Messaging:** Telegram Bot API.
 - **Login:** Keycloak (OIDC, PKCE).
 - **Geo:** OSRM, Nominatim.
 - **Runtime:** Docker, Docker Compose.
