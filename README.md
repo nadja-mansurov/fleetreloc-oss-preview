@@ -53,7 +53,7 @@ The dispatcher dashboard is in English, German and Arabic (right-to-left).
 - **Measured:** an offline eval harness runs the full pipeline on 36 synthetic documents (126 cars; English, German and Arabic orders; digital PDFs, scans and photos) and scores each field. Example: carrying order-level dates to every car raised date accuracy from 38% to 67% (English and German: 100%), and cars with every field right from 19% to 33%. Arabic extraction is the weak spot (VINs 29%); every Arabic document still goes to manual review, and the checks catch it.
 
 ### One bad file never blocks the rest
-- Scanned manifests are parsed by a worker from a job queue in PostgreSQL. Every file is its own job with a time limit: a broken or hanging file fails alone and is reported to the dispatcher, and the other files keep going.
+- Scanned manifests are parsed by a worker from a job queue in PostgreSQL. Every file is read in its own parser process with a time limit: a broken or hanging file fails alone and is reported to the dispatcher, and the other files keep going.
 - A crashed worker's jobs are picked up again, and files already read are not read twice.
 - A client retrying an upload with the same `Idempotency-Key` gets the first batch back, not a duplicate.
 
