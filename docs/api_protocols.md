@@ -4,12 +4,13 @@
 
 The contracts between the dispatcher dashboard, the API, drivers' messengers
 and the on-premise parsing pipeline — **as built**. Last checked against the
-code: 2026-11-22. Base path: `/api/v1`. Planned work: see
+code: 2026-11-28. Base path: `/api/v1`. Planned work, and what is
+implemented but still waiting for an end-to-end check: see
 [Planned](../README.md#planned) in the README.
 
 ```text
-  Dispatcher dashboard (Next.js) ──Bearer (OIDC)──►  FastAPI  ──► PostgreSQL (tenant-filtered ORM, job queue, outbox)
-        ▲   login: Keycloak (OIDC, PKCE)              │  ▲      ──► Redis (pending offers, relay chain, dedupe)
+  Dispatcher dashboard (Next.js) ──Bearer (OIDC)──►  FastAPI  ──► PostgreSQL (tenant-filtered ORM, job queue, outbox, Telegram updates)
+        ▲   login: Keycloak (OIDC, PKCE)              │  ▲      ──► Redis (pending offers, relay chain)
         └──────────── polls every 10–20 s ────────────┘  │      ──► Nominatim (geocoding), OSRM / Mapbox (routing)
   Drivers: Telegram bot ──webhook (secret header)────────┘
                                                       Manifest worker ──► RapidOCR + Ollama (on-prem)
@@ -24,6 +25,9 @@ Three processes share one code base and one database:
   recovery, file cleanup, batch retention).
 - **Outbox relay** — sends the driver messages the API and worker queued
   (section 4.2).
+
+WhatsApp has no process of its own: the API writes offer texts, and the
+dispatcher sends them from their own WhatsApp (section 4.3).
 
 ---
 
@@ -157,8 +161,9 @@ normalized, duplicates dropped):
 - Drivers are spread over the unclaimed vehicles round-robin; each offer is
   a Telegram message with `[✅ Claim Driving]`, `[👥 Claim as Passenger]`
   (leg 2+), `[❌ Reject]`, valid for 1 hour.
-- Each offer is counted against the plan's message quota when it is queued
-  and refunded if it is never delivered.
+- Each offer is counted against the plan's message quota in the same
+  transaction that queues it, so a crash can't count an offer that was never
+  queued; it is refunded if it is never delivered.
 - Response: `offered`, `pending`, `unreachable` (not registered with the
   bot), `ineligible` (hasn't cleared the previous leg), `quota_exceeded`,
   `vehicles`; 402 if the quota stopped every offer. The same statuses appear
@@ -185,7 +190,8 @@ not of the registry vehicle.
 | `POST /vehicles/` | create a task; with `batch_id` the batch must be the tenant's (404) and accept vehicles (409); it goes through the upload ingestion (geocoded, routed, added to the batch) |
 | `GET /drivers`, `POST /drivers`, `PATCH /drivers/{driver_id}`, `DELETE /drivers/{driver_id}` | the dispatcher's driver list: body `{"display_name", "language": "de"\|"ar"\|"en"}`; no phone numbers (a name with 7+ digits is rejected, 422); names unique per tenant (409); delete replaces the name in batch driver lists with "Removed driver" |
 | `POST /orders/{vehicle_id}/send-offer` | body `{"driver_phone": "…"}`: offer one vehicle on Telegram; 402 quota, 404 unknown vehicle, 409 if taken, the batch needs review, or the driver hasn't registered with the bot |
-| `POST /jobs/claim` | body `{"batch_id", "driver_id", "task_id"?}`: the dispatcher records a claim for a driver from the list — that car, or the first unclaimed one of the batch's leg; 404 unknown driver or car, 409 if the batch isn't dispatchable, the driver hasn't cleared the previous leg, or the car / every car is taken. The batch's `drivers` list shows the driver's name |
+| `POST /jobs/claim` | body `{"batch_id", "driver_id", "task_id"?, "mode"?}`: the dispatcher records a driver's answer from WhatsApp for a driver from the list. `mode` `drive` (default): claims that car, or the first unclaimed one of the batch's leg; `passenger`: rides along on the leg (leg 2+, someone must drive a car of it; recorded in `co_driver_hashes`, no car taken); `reject`: declines the leg (409 for a driver holding a car there; a passenger seat is given up). 404 unknown driver or car, 409 if the batch isn't dispatchable, the driver hasn't cleared the previous leg, the car / every car is taken, or the answer can't be recorded (reason in `detail`). The batch's `drivers` list shows the driver's name and `claimed` / `passenger` / `rejected` |
+| `POST /batches/{batch_id}/whatsapp-offers` | body `{"driver_ids": [...], "group_language"?: "de"\|"ar"\|"en"}`: writes the leg's WhatsApp offers (section 4.3): per driver a text in their language for one open car (round-robin) and a `wa.me` share link, optionally one group text listing every open car (`cars` gives their numbers). The drivers show as `pending` (`ineligible` without a text if they haven't cleared the previous leg; `claimed` / `passenger` answers are kept). Sends nothing, uses no quota. 404 unknown batch or driver, 409 batch not dispatchable or no open car, 422 neither drivers nor group |
 | `POST /vrp/batches/{batch_id}/optimize-fleet` | real-road routes for the batch's vehicles |
 | `POST /vrp/recalculate-driver-vector` | route metrics for a driver and co-drivers on a batch |
 
@@ -209,8 +215,24 @@ Vehicle task statuses: `unassigned`, `locked` (unused), `assigned`,
 ### 4.1 Telegram — `POST /telegram/webhook`
 
 Rejects a missing or wrong secret-token header with 403. With a valid
-secret it always answers 200 (a 5xx would make Telegram redeliver); each
-`update_id` is processed once.
+secret, each update is **processed at least once until its decision is
+saved, and decided at most once**. Every `update_id` gets a row in
+`telegram_updates` before processing:
+
+| Situation | Answer |
+|---|---|
+| processed: its decision (claim, decline, passenger) saved, or nothing to save (`/start`, a reply) | 200 |
+| the same update already `done` or `failed` | 200, nothing processed again |
+| the same update being processed right now (a PostgreSQL advisory lock is held) | 503 with `Retry-After: 5`, so Telegram repeats it later |
+| a failure before anything was saved | 500, so Telegram repeats it; safe, because nothing was saved |
+| a failure after the decision was saved | 200 and an error log; a repeat would find the offer gone |
+| failed `TELEGRAM_UPDATE_MAX_ATTEMPTS` (5) times | recorded `failed` and answered 200, so Telegram stops repeating it |
+
+A crashed request releases its lock with its connection, so Telegram's next
+repeat is processed without waiting for a timeout. Rows hold no chat id or
+text and are deleted after 24 hours (Telegram keeps undelivered updates no
+longer). Tested by simulating the state a crash leaves; a real crash of the
+API during a tap has not been checked yet.
 
 | Update | Effect |
 |---|---|
@@ -227,6 +249,8 @@ a return-trip (backhaul) leg in the same session, if one is open.
 
 ### 4.2 Outbound messages (outbox)
 
+Implemented and tested; the end-to-end check with a real bot is still open.
+
 Every message to a driver (offer, claim confirmation, passenger added,
 declined, removed by the dispatcher) is written to `outbox_messages` in the
 same transaction as the change it reports, so it exists if and only if that
@@ -242,11 +266,29 @@ change was committed. The relay service sends it afterwards:
 - Rows store the `driver_hash`, never a chat id; the relay looks the chat up
   when it sends. Sent rows are deleted after 24 h, failed ones after 14 days.
 
-### 4.3 WhatsApp
+### 4.3 WhatsApp — share links, sent by the dispatcher
 
-There is no WhatsApp API integration. The planned WhatsApp path: the
-dispatcher sends offers from their own WhatsApp and records claims with
-`POST /jobs/claim` (section 3).
+Implemented and tested; the end-to-end check in WhatsApp is still open (see
+[Planned](../README.md#planned)).
+
+No WhatsApp API and no webhook: `POST /batches/{batch_id}/whatsapp-offers`
+returns the texts, and the dashboard shows each with **Copy** and **Send via
+WhatsApp** (`https://wa.me/?text=<encodeURIComponent(text)>`, no phone
+number, opened in a new tab with `rel="noopener noreferrer"`). The
+dispatcher picks the chat in their own WhatsApp and records each answer with
+`POST /jobs/claim` (`drive` / `passenger` / `reject`, section 3).
+
+- **Texts:** route, pickup window, delivery deadline, car (make/model,
+  plate), the leg, and the reply codes `1` drive (group: the car's number),
+  `P` passenger (leg 2+ only), `0` no. Built only from those fields: no phone
+  number, token, tenant, batch, task or driver ID, and no VIN. Times are
+  printed as stored (the manifest's local wall-clock time), like the
+  Telegram offer.
+- **Arabic:** Latin values (addresses, plates, times) are wrapped in Unicode
+  directional isolates (U+2068 … U+2069); directional control characters in
+  customer data are removed. A language or phrase without a translation
+  falls back to English and logs a warning. The German and Arabic texts are
+  drafts waiting for a native speaker's review.
 
 ## 5. Route legs (`route_legs.status`)
 
@@ -258,7 +300,7 @@ tenants.
 |---|---|
 | `pending` | created / reopened (retry, last driver removed) |
 | `claimed_driver` | a driver claims a vehicle of the leg (Telegram or `/jobs/claim`) |
-| `claimed_passenger` | a passenger joins a pending leg (`co_driver_hashes`) |
+| `claimed_passenger` | a passenger joins a pending leg (`co_driver_hashes`; Telegram or `/jobs/claim` with `mode: passenger`) |
 | `rejected` | every driver offered the leg declined |
 | `passenger_offered` | allowed by the CHECK constraint, not set by the current code |
 
@@ -319,6 +361,7 @@ Earlier versions of this document described these as existing; they are
 not part of the code: BullMQ worker queues (the job queue is procrastinate,
 in PostgreSQL), gRPC / a separate VRP solver service, Redis Redlock
 claiming (claims are an atomic PostgreSQL update), Supabase Auth/Realtime
-and WebSocket events, a WhatsApp API integration (Meta Cloud API or Bird),
+and WebSocket events, a WhatsApp API integration (Meta Cloud API or Bird;
+WhatsApp offers go through the dispatcher's own WhatsApp, section 4.3),
 a general API rate limit, and error codes such as `ERR_REDLOCK_FAILED`.
 Planned work is listed under [Planned](../README.md#planned) in the README.

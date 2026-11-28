@@ -4,7 +4,7 @@
 
 The PostgreSQL schema as defined by the application's SQLAlchemy models and
 Alembic migrations; a test runs `alembic check`, so the two can't silently
-differ. Last checked against the code: 2026-11-22.
+differ. Last checked against the code: 2026-11-28.
 
 Keycloak (dashboard login) keeps its own data in a separate database with
 its own user in production; it shares no tables or credentials with this
@@ -71,8 +71,13 @@ random storage keys, never file names or manifest content.
   sweep once it has been inactive longer than the tenant's retention period
   (`companies.batch_retention_days`, default `BATCH_RETENTION_DAYS` 90).
   Working tables (`outbox_messages`, `idempotency_keys`,
-  `uploaded_file_hashes`, `manifest_file_results`) expire sooner; see each
-  table.
+  `uploaded_file_hashes`, `manifest_file_results`, `telegram_updates`)
+  expire sooner; see each table.
+- **Not tenant-scoped:** `telegram_updates` holds only Telegram's
+  `update_id` and processing state, no tenant data, chat id or text; the
+  tenant of a tap is resolved from the offered task (see
+  [Multi-Tenant Isolation Enforcement](#multi-tenant-isolation-enforcement),
+  point 5).
 
 ## PostgreSQL Schema (DDL)
 
@@ -418,6 +423,26 @@ CREATE TABLE manifest_file_results (
 );
 
 CREATE INDEX ix_manifest_file_results_batch_id ON manifest_file_results(batch_id);
+
+-- 12. TELEGRAM_UPDATES (webhook updates: at least once, decided at most once)
+-- One row per webhook update. 'received' (attempts counted) in its own
+-- commit before processing, while the request holds a PostgreSQL advisory
+-- lock on the update (a free lock means the earlier request crashed);
+-- 'done' in the handler's first commit, i.e. together with the decision
+-- (claim, decline, passenger); 'failed' after TELEGRAM_UPDATE_MAX_ATTEMPTS
+-- (5). No chat id or text. Deleted after TELEGRAM_UPDATE_RETENTION_HOURS (24).
+CREATE TABLE telegram_updates (
+    update_id BIGINT PRIMARY KEY,           -- Telegram's, per bot
+    status VARCHAR(10) NOT NULL,            -- received | done | failed
+    attempts INTEGER NOT NULL,
+    last_error VARCHAR(200),                -- exception class name only
+    received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at TIMESTAMPTZ,
+
+    CONSTRAINT ck_telegram_updates_status CHECK (status IN ('received', 'done', 'failed'))
+);
+
+CREATE INDEX ix_telegram_updates_received_at ON telegram_updates(received_at);
 ```
 
 ## Entity Relationship Summary
@@ -437,6 +462,8 @@ companies (tenant)
         │     ├─< manifest_file_results (tenant_id, batch_id) -- worker progress, until the batch is final
         │     └─< broadcast_waves (batch_id)                  -- not used by the dispatch flow yet
         └─< route_legs (tenant_id, session_id, batch_id?)  -- multi-leg segments
+
+telegram_updates                                  -- standalone: webhook processing state, no tenant data
 ```
 
 - `optimization_sessions` is the top-level parallel-stream grouping per tenant.
@@ -474,8 +501,8 @@ used:
 |---|---|
 | `pending` | leg creation; "Retry" (`POST /batches/{batch_id}/segments/{leg_id}/retry`, 409 while the leg has drivers); removing the last driver |
 | `claimed_driver` | a vehicle claim on the leg — Telegram or `POST /jobs/claim`; `driver_phone` holds the driver key |
-| `claimed_passenger` | a passenger joining a still-pending leg; passengers are listed in `co_driver_hashes` |
-| `rejected` | the last offered driver declining (no vehicle taken) |
+| `claimed_passenger` | a passenger joining a still-pending leg — Telegram or `POST /jobs/claim` with `mode: passenger`; passengers are listed in `co_driver_hashes` |
+| `rejected` | the last offered driver declining (no vehicle taken) — Telegram or `POST /jobs/claim` with `mode: reject` |
 | `passenger_offered` | allowed by the constraint, not set by the current code |
 
 After a claim, the driver is offered the next relay leg, else an open
